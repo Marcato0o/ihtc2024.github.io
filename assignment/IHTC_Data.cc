@@ -207,7 +207,7 @@ bool IHTC_Data::writeSolution(const std::string &path) const {
     return true;
 }
 
-bool IHTC_Data::runGreedyTodo() {
+bool IHTC_Data::runGreedySolver() {
     // Run the IHTC_Solver using this data and report admitted count.
     IHTC_Output out_data;
     IHTC_Solver solver(*this, out_data);
@@ -215,6 +215,6 @@ bool IHTC_Data::runGreedyTodo() {
 
     size_t admitted = 0;
     for (bool a : out_data.admitted) if (a) admitted++;
-    std::cout << "runGreedyTodo: admitted " << admitted << "/" << out_data.admitted.size() << " patients." << std::endl;
+    std::cout << "runGreedySolver: admitted " << admitted << "/" << out_data.admitted.size() << " patients." << std::endl;
     return true;
 }

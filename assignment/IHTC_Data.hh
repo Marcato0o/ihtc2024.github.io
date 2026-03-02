@@ -55,8 +55,8 @@ public:
     bool loadInstance(const std::string &path);
     // Write solution JSON (stub - implement solution format later)
     bool writeSolution(const std::string &path) const;
-    // Placeholder for greedy solver (todo)
-    bool runGreedyTodo();
+    // Run the integrated greedy solver
+    bool runGreedySolver();
 
     // Basic data containers (expand to match instance schema)
     std::vector<Patient> patients;
