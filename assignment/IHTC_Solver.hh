@@ -29,6 +29,8 @@ struct IHTC_Output {
         ot_minutes_used.assign(num_ots, std::vector<int>(days,0));
     }
 
+    // Check whether a patient can be assigned to `room_idx` on `day` and (optionally) `ot_idx`.
+    // Enforces hard constraints such as room capacity, incompatible rooms and OT capacity.
     bool canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Data &in) const {
         if (room_idx < 0 || room_idx >= (int)room_occupancy.size()) return false;
         if (day < 0 || day >= (int)room_occupancy[0].size()) return false;
@@ -46,15 +48,25 @@ struct IHTC_Output {
         return true;
     }
 
+    // Assign the patient and update occupancy/OT usage.
+    // We conservatively mark occupancy for the admission day and the following
+    // `length_of_stay - 1` days so room capacity is respected over the stay.
     void assignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Data &in) {
         admitted[patient_id] = true;
         admit_day[patient_id] = day;
         room_assigned_idx[patient_id] = room_idx;
         ot_assigned_idx[patient_id] = ot_idx;
-        // mark occupancy for the length of stay (naive: only mark admit day)
-        room_occupancy[room_idx][day] += 1;
+        // mark occupancy for the whole length of stay (bounded by horizon)
+        int los = std::max(1, in.patients[patient_id].length_of_stay);
+        int days = room_occupancy.empty() ? 0 : (int)room_occupancy[0].size();
+        for (int dd = 0; dd < los; ++dd) {
+            int dd_idx = day + dd;
+            if (dd_idx >= 0 && dd_idx < days) room_occupancy[room_idx][dd_idx] += 1;
+        }
         if (ot_idx >=0 && ot_idx < (int)ot_minutes_used.size()) {
-            ot_minutes_used[ot_idx][day] += in.patients[patient_id].surgery_time;
+            int days_ot = (int)ot_minutes_used[0].size();
+            if (day >=0 && day < days_ot)
+                ot_minutes_used[ot_idx][day] += in.patients[patient_id].surgery_time;
         }
     }
 
@@ -84,20 +96,20 @@ private:
     const IHTC_Data& in;
     IHTC_Output& out;
 
-    // --- Fasi dell'Algoritmo ---
+    // --- Algorithm Phases ---
     
-    // Fase 1: Ordina i pazienti per priorità (Urgenza e "Difficoltà di incastro")
+    // Phase 1: Sort patients by priority (urgency and "difficulty to fit")
     std::vector<int> sortPatientsByPriority() const;
 
-    // Fase 2: Assegna Data, Stanza e Sala Operatoria (PAS + SCP)
+    // Phase 2: Assign admission day, room and (optionally) operating theatre
     bool schedulePatient(int patient_id);
 
-    // Fase 3: Assegna gli Infermieri ai turni delle stanze occupate (NRA)
+    // Phase 3: Assign nurses to shifts for occupied rooms
     void assignNurses();
 
-    // --- Funzioni di Valutazione (Euristiche Locali) ---
+    // --- Evaluation helpers (local heuristics) ---
     
-    // Calcola una stima del costo (Violazione Vincoli Soft) per un potenziale assegnamento
+    // Compute an estimated cost (soft-constraint violations) for a candidate placement
     double evaluatePlacementCost(int patient_id, int day, int room_id, int ot_id) const;
 };
 

@@ -9,65 +9,64 @@ using namespace std;
 IHTC_Solver::IHTC_Solver(const IHTC_Data& input_data, IHTC_Output& output_data)
     : in(input_data), out(output_data) {
     // initialize output containers based on input sizes
-    out.init(in.patients.size(), in.rooms.size(), in.ots.size(), in.D > 0 ? in.D : 1);
+    int days = in.D > 0 ? in.D : 1;
+    out.init(in.patients.size(), in.rooms.size(), in.ots.size(), days);
 }
 
 void IHTC_Solver::greedySolve() {
-    cout << "[SOLVER] Avvio Algoritmo Greedy..." << endl;
+    // High-level algorithm:
+    // 1) Sort patients by priority (mandatory/urgency/size)
+    // 2) For each patient in order, try to find the cheapest valid placement
+    //    (day, room, optional OT). If found, assign and update occupancy.
+    // 3) After all patients are considered, perform a simple nurse assignment pass.
 
-    // FASE 1: Ordinamento Strategico
+    cout << "[SOLVER] Starting greedy solver..." << endl;
+
+    // Phase 1: compute patient order
     vector<int> sorted_patients = sortPatientsByPriority();
 
-    // FASE 2: Assegnamento Pazienti (Routing e Scheduling)
+    // Phase 2: schedule patients one-by-one
     int admitted_count = 0;
     int mandatory_failed = 0;
 
     for (int patient_id : sorted_patients) {
-        if (schedulePatient(patient_id)) {
-            admitted_count++;
-        } else if (in.patients[patient_id].mandatory) {
-            // GRAVE: Un paziente obbligatorio non ha trovato posto.
-            // In un greedy puro questo è un "game over" per la validità (H5 violato).
-            mandatory_failed++;
-        }
-    }
-    cout << "[SOLVER] Pazienti ammessi: " << admitted_count << "/" << in.patients.size() << endl;
-    if (mandatory_failed > 0) {
-        cerr << "[WARNING] Violato H5! " << mandatory_failed << " pazienti obbligatori non ammessi." << endl;
+        bool ok = schedulePatient(patient_id);
+        if (ok) admitted_count++;
+        else if (in.patients[patient_id].mandatory) mandatory_failed++;
     }
 
-    // FASE 3: Assegnamento Infermieri (NRA)
+    cout << "[SOLVER] Patients admitted: " << admitted_count << "/" << in.patients.size() << endl;
+    if (mandatory_failed > 0) {
+        cerr << "[WARNING] Mandatory patients not admitted: " << mandatory_failed << endl;
+    }
+
+    // Phase 3: assign nurses (simple heuristic)
     assignNurses();
-    cout << "[SOLVER] Assegnamento infermieri completato." << endl;
+    cout << "[SOLVER] Nurse assignment finished." << endl;
 }
 
 std::vector<int> IHTC_Solver::sortPatientsByPriority() const {
+    // Build index list
     vector<int> p_ids(in.patients.size());
     for (int i = 0; i < (int)in.patients.size(); ++i) p_ids[i] = i;
 
-    // Implementiamo un'euristica simile al "First-Fit Decreasing".
-    // Diamo la priorità a chi è più "difficile" da inserire.
+    // Heuristic ordering:
+    // - mandatory patients first
+    // - among mandatory, smaller time window (due - release) first
+    // - longer stays and longer surgeries earlier (harder to fit)
     std::sort(p_ids.begin(), p_ids.end(), [&](int a, int b) {
         const Patient& pa = in.patients[a];
         const Patient& pb = in.patients[b];
 
-        // 1. Mandatory vince sempre su Optional
-        if (pa.mandatory != pb.mandatory) {
-            return pa.mandatory > pb.mandatory; 
-        }
+        if (pa.mandatory != pb.mandatory) return pa.mandatory > pb.mandatory;
 
-        // 2. Se entrambi Mandatory, ordiniamo per "Finestra di tempo utile" (Urgenza)
         if (pa.mandatory) {
             int window_a = pa.due_date - pa.release_date;
             int window_b = pb.due_date - pb.release_date;
             if (window_a != window_b) return window_a < window_b;
         }
 
-        // 3. A parità, scheduliamo prima chi occupa più risorse (lunga degenza o chirurgia lunga)
-        if (pa.length_of_stay != pb.length_of_stay) {
-            return pa.length_of_stay > pb.length_of_stay;
-        }
-        
+        if (pa.length_of_stay != pb.length_of_stay) return pa.length_of_stay > pb.length_of_stay;
         return pa.surgery_time > pb.surgery_time;
     });
 
@@ -75,84 +74,120 @@ std::vector<int> IHTC_Solver::sortPatientsByPriority() const {
 }
 
 bool IHTC_Solver::schedulePatient(int patient_id) {
+    // Try to place a single patient by exploring candidate days, rooms and OTs.
     const Patient& p = in.patients[patient_id];
-    
+
     int best_day = -1;
     int best_room = -1;
-    int best_ot = -1;
-    double min_cost = numeric_limits<double>::max(); // Infinito
+    int best_ot = -1; // -1 means no OT assigned
+    double min_cost = numeric_limits<double>::max();
 
-    // Per un paziente opzionale l'orizzonte è l'intero periodo.
-    // Per un mandatory è tra release_day e due_day.
+    // define search window
     int start_d = p.release_date;
-    int end_d = p.mandatory ? p.due_date : (in.D>0 ? in.D - 1 : 0);
+    int end_d = start_d;
+    if (in.D > 0) end_d = in.D - 1;
+    if (p.due_date > end_d) end_d = p.due_date; // ensure due_date is considered if present
 
-    // Ricerca Esaustiva Locale: Proviamo TUTTE le combinazioni possibili per questo singolo paziente
+    // Iterate over days, rooms, and OTs (including "no OT" option)
     for (int d = start_d; d <= end_d; ++d) {
         for (int r = 0; r < (int)in.rooms.size(); ++r) {
-            for (int ot = 0; ot < (int)in.ots.size(); ++ot) {
-                
-                // Controllo Vincoli Hard (H1, H2, H3, H4, H6, H7) in O(1)
-                if (out.canAssignPatient(patient_id, d, r, ot, in)) {
-                    
-                    // Se valido, calcoliamo i Vincoli Soft (S1, S5, S7, ecc.)
-                    double current_cost = evaluatePlacementCost(patient_id, d, r, ot);
-                    
-                    if (current_cost < min_cost) {
-                        min_cost = current_cost;
-                        best_day = d;
-                        best_room = r;
-                        best_ot = ot;
-                    }
+            // allow ot = -1 (no OT) and every real OT index
+            int max_ot_loop = std::max(0, (int)in.ots.size());
+            for (int ot_iter = -1; ot_iter < max_ot_loop; ++ot_iter) {
+                int ot = ot_iter;
+                // Check hard constraints quickly
+                if (!out.canAssignPatient(patient_id, d, r, ot, in)) continue;
+
+                // Compute soft-constraint cost for this placement
+                double current_cost = evaluatePlacementCost(patient_id, d, r, ot);
+                if (current_cost < min_cost) {
+                    min_cost = current_cost;
+                    best_day = d;
+                    best_room = r;
+                    best_ot = ot;
                 }
             }
         }
     }
 
-    // Se abbiamo trovato almeno un posto valido, registriamo l'assegnamento
     if (best_day != -1) {
         out.assignPatient(patient_id, best_day, best_room, best_ot, in);
         return true;
     }
-
-    return false; // Paziente non ammesso (Nessuna combinazione valida trovata)
+    return false;
 }
 
 double IHTC_Solver::evaluatePlacementCost(int patient_id, int day, int room_id, int ot_id) const {
+    // Simple, explainable cost function using weights provided in the instance.
+    // The function returns a lower score for better placements.
     double cost = 0.0;
     const Patient& p = in.patients[patient_id];
 
-    // Euristica per S7: Penalità per il ritardo di ammissione
-    // Costo = (giorno_scelto - release_day) * Peso_S7
-    cost += (day - p.release_date) * 5.0; // Sostituire 5.0 con il peso reale dal JSON
+    // helper to read weight keys, default to given fallback
+    auto w = [&](const std::string &key, double fallback) -> double {
+        auto it = in.weights.find(key);
+        if (it != in.weights.end()) return static_cast<double>(it->second);
+        return fallback;
+    };
 
-    // Euristica per S5: Minimizzare le Sale Operatorie aperte
-    // Se la sala 'ot_id' in quel giorno è vuota, usarla comporta "aprirla" (Costo alto)
-    // Se ha già minuti occupati, usarla costa zero (stiamo ottimizzando lo spazio)
-    if (out.getOtMinutesUsed(ot_id, day) == 0) {
-        cost += 20.0; // Penalità per apertura nuova sala (Peso_S5)
+    // Penalize delayed admission: (day - release_date) * weight_S7
+    double wS7 = w("S7", 5.0);
+    cost += (day - p.release_date) * wS7;
+
+    // Penalize opening a new OT at that day (prefer re-using open OTs)
+    double wS5 = w("S5", 20.0);
+    if (ot_id >= 0) {
+        if (out.getOtMinutesUsed(ot_id, day) == 0) cost += wS5;
     }
 
-    // Aggiungeremo le altre euristiche qui (es. S1 mix di età nella stanza)
-    
+    // Prefer rooms with lower occupancy (soft), weight S1
+    double wS1 = w("S1", 1.0);
+    int occ = out.getRoomOccupancy(room_id, day);
+    cost += occ * wS1;
+
+    // Prefer shorter surgery time earlier (small penalty for large surgery)
+    double wSx = w("Sx", 0.1);
+    cost += p.surgery_time * wSx;
+
     return cost;
 }
 
 void IHTC_Solver::assignNurses() {
-    // Itera su tutti i giorni, su tutti e 3 i turni
-    int days = in.D>0 ? in.D : 1;
+    // Very simple nurse assignment heuristic:
+    // For each day and shift, compute required nurse load per room and try to
+    // assign nurses greedily by available capacity and skill level.
+
+    int days = in.D > 0 ? in.D : 1;
     for (int d = 0; d < days; ++d) {
         for (int shift = 0; shift < in.shifts_per_day; ++shift) {
-            int global_shift_id = (d * in.shifts_per_day) + shift;
+            // compute required load per room for this shift
+            std::vector<int> room_load(in.rooms.size(), 0);
+            for (size_t pid = 0; pid < in.patients.size(); ++pid) {
+                if (!out.admitted[pid]) continue;
+                if (out.admit_day[pid] != d) continue;
+                int ridx = out.room_assigned_idx[pid];
+                if (ridx < 0 || ridx >= (int)room_load.size()) continue;
+                // patient nurse_load_per_shift may be shorter than shifts_per_day
+                if (!in.patients[pid].nurse_load_per_shift.empty()) {
+                    int local = in.patients[pid].nurse_load_per_shift[shift % in.patients[pid].nurse_load_per_shift.size()];
+                    room_load[ridx] += local;
+                } else {
+                    // fallback: each patient costs 1 unit of nurse load
+                    room_load[ridx] += 1;
+                }
+            }
 
-            // Per ogni stanza
+            // simple greedy: for each room with positive load, pick a nurse with enough remaining capacity
+            // We do not persist assignments in output yet; this is a placeholder for a real assignment structure.
             for (int r = 0; r < (int)in.rooms.size(); ++r) {
-                // H8: Se la stanza è occupata in questo giorno, SERVE un infermiere
-                if (out.getRoomOccupancy(r, d) > 0) {
-                    int best_nurse = -1;
-                    // ... qui implementeremo la ricerca dell'infermiere migliore ...
-                    // minimizzando S2 (skill) e S4 (carico di lavoro)
-                    // out.assignNurseToRoom(best_nurse, r, global_shift_id);
+                if (room_load[r] <= 0) continue;
+                // find any nurse with sufficient max_load
+                for (int ni = 0; ni < (int)in.nurses.size(); ++ni) {
+                    if (in.nurses[ni].max_load >= room_load[r]) {
+                        // assign (conceptually) and reduce nurse availability
+                        // In a full implementation we'd record this and reduce nurse max_load for subsequent rooms
+                        break;
+                    }
                 }
             }
         }
