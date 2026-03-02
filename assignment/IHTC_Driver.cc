@@ -14,6 +14,15 @@ int main(int argc, char **argv) {
         std::cerr << "Error loading instance.\n";
         return 2;
     }
+    // Print parsing summary
+    std::cout << "Parsed instance summary:\n";
+    std::cout << "  patients: " << data.patients.size() << "\n";
+    std::cout << "  rooms:    " << data.rooms.size() << "\n";
+    std::cout << "  nurses:   " << data.nurses.size() << "\n";
+    std::cout << "  surgeons:" << data.surgeons.size() << "\n";
+    std::cout << "  OTs:      " << data.ots.size() << "\n";
+    std::cout << "  days D:   " << data.D << "\n";
+    std::cout << "  shifts/d: " << data.shifts_per_day << "\n";
 
     // TODO: call greedy solver implementation to populate solution
     if (!data.runGreedyTodo()) {
