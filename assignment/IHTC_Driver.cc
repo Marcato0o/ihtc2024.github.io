@@ -1,5 +1,10 @@
 #include "IHTC_Data.hh"
+#include "IHTC_Solver.hh"
 #include <iostream>
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+using nlohmann::json;
 
 int main(int argc, char **argv) {
     if (argc < 3) {
@@ -24,16 +29,38 @@ int main(int argc, char **argv) {
     std::cout << "  days D:   " << data.D << "\n";
     std::cout << "  shifts/d: " << data.shifts_per_day << "\n";
 
-    // TODO: call greedy solver implementation to populate solution
-    if (!data.runGreedyTodo()) {
-        std::cerr << "Greedy todo failed.\n";
-        return 4;
-    }
-    if (!data.writeSolution(out)) {
-        std::cerr << "Error writing solution.\n";
-        return 3;
+    // Run solver
+    IHTC_Output out_data;
+    IHTC_Solver solver(data, out_data);
+    solver.greedySolve();
+
+    // Build solution JSON from solver output
+    json sol;
+    sol["admitted"] = json::array();
+    for (size_t pid = 0; pid < data.patients.size(); ++pid) {
+        if (pid < out_data.admitted.size() && out_data.admitted[pid]) {
+            json ja;
+            ja["id"] = data.patients[pid].id;
+            ja["admission_day"] = out_data.admit_day[pid];
+            if (out_data.room_assigned_idx[pid] >= 0 && out_data.room_assigned_idx[pid] < (int)data.rooms.size())
+                ja["room"] = data.rooms[out_data.room_assigned_idx[pid]].id;
+            else
+                ja["room"] = nullptr;
+            if (out_data.ot_assigned_idx[pid] >= 0 && out_data.ot_assigned_idx[pid] < (int)data.ots.size())
+                ja["ot"] = data.ots[out_data.ot_assigned_idx[pid]].id;
+            else
+                ja["ot"] = nullptr;
+            sol["admitted"].push_back(ja);
+        }
     }
 
-    std::cout << "Wrote placeholder solution to " << out << "\n";
+    // write to file
+    std::ofstream fout(out);
+    if (!fout) {
+        std::cerr << "Error opening output file: " << out << "\n";
+        return 3;
+    }
+    fout << sol.dump(2) << std::endl;
+    std::cout << "Wrote solution to " << out << "\n";
     return 0;
 }

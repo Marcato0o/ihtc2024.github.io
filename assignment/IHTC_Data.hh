@@ -8,7 +8,7 @@
 #include <map>
 #include <nlohmann/json.hpp>
 
-using nlohmann::json;
+using json = nlohmann::json;
 
 struct Patient {
     std::string id;

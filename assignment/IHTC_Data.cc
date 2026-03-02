@@ -3,6 +3,7 @@
 #include <iostream>
 #include <sstream>
 #include <nlohmann/json.hpp>
+#include "IHTC_Solver.hh"
 
 using namespace std;
 using json = nlohmann::json;
@@ -207,8 +208,13 @@ bool IHTC_Data::writeSolution(const std::string &path) const {
 }
 
 bool IHTC_Data::runGreedyTodo() {
-    std::cout << "runGreedyTodo(): not implemented. This is a placeholder.\n";
-    // TODO: implement the greedy constructive algorithm here.
+    // Run the IHTC_Solver using this data and report admitted count.
+    IHTC_Output out_data;
+    IHTC_Solver solver(*this, out_data);
+    solver.greedySolve();
+
+    size_t admitted = 0;
+    for (bool a : out_data.admitted) if (a) admitted++;
+    std::cout << "runGreedyTodo: admitted " << admitted << "/" << out_data.admitted.size() << " patients." << std::endl;
     return true;
 }
-
