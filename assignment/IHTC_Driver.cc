@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
     std::cout << "  days D:   " << data.D << "\n";
     std::cout << "  shifts/d: " << data.shifts_per_day << "\n";
 
-    // Run solver
+    // Run greedy solver (use solver directly so we can access output)
     IHTC_Output out_data;
     IHTC_Solver solver(data, out_data);
     solver.greedySolve();
