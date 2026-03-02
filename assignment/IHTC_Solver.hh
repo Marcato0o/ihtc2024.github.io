@@ -3,6 +3,7 @@
 #define _IHTC_SOLVER_HH_
 
 #include "IHTC_Data.hh"
+#include <algorithm>
 #include <vector>
 #include <string>
 
@@ -36,8 +37,13 @@ struct IHTC_Output {
         if (day < 0 || day >= (int)room_occupancy[0].size()) return false;
         const Patient &p = in.patients[patient_id];
         const Room &r = in.rooms[room_idx];
-        // room capacity
-        if (room_occupancy[room_idx][day] >= r.capacity) return false;
+        // room capacity over the full length of stay
+        int los = std::max(1, p.length_of_stay);
+        int days = (int)room_occupancy[0].size();
+        if (day + los > days) return false;
+        for (int dd = 0; dd < los; ++dd) {
+            if (room_occupancy[room_idx][day + dd] >= r.capacity) return false;
+        }
         // incompatible room
         for (auto &bad : p.incompatible_rooms) if (bad == r.id) return false;
         // OT capacity if ot_idx valid

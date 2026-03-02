@@ -83,10 +83,13 @@ bool IHTC_Solver::schedulePatient(int patient_id) {
     double min_cost = numeric_limits<double>::max();
 
     // define search window
-    int start_d = p.release_date;
-    int end_d = start_d;
-    if (in.D > 0) end_d = in.D - 1;
-    if (p.due_date > end_d) end_d = p.due_date; // ensure due_date is considered if present
+    int start_d = std::max(0, p.release_date);
+    int end_d = (in.D > 0) ? (in.D - 1) : start_d;
+    if (p.mandatory) {
+        // Mandatory patients must be scheduled no later than due_date.
+        end_d = std::min(end_d, p.due_date);
+    }
+    if (end_d < start_d) return false;
 
     // Iterate over days, rooms, and OTs (including "no OT" option)
     for (int d = start_d; d <= end_d; ++d) {

@@ -1,79 +1,247 @@
 {
   "admitted": [
     {
-      "admission_day": 0,
-      "id": "p02",
+      "admission_day": 18,
+      "id": "p00",
       "ot": null,
-      "room": "r2"
+      "room": "r1"
     },
     {
-      "admission_day": 0,
+      "admission_day": 15,
+      "id": "p01",
+      "ot": null,
+      "room": "r3"
+    },
+    {
+      "admission_day": 8,
+      "id": "p02",
+      "ot": null,
+      "room": "r4"
+    },
+    {
+      "admission_day": 1,
       "id": "p03",
       "ot": null,
       "room": "r3"
     },
     {
-      "admission_day": 0,
+      "admission_day": 3,
       "id": "p04",
       "ot": null,
-      "room": "r4"
+      "room": "r3"
     },
     {
-      "admission_day": 0,
+      "admission_day": 14,
+      "id": "p05",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 17,
+      "id": "p06",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 3,
+      "id": "p07",
+      "ot": null,
+      "room": "r3"
+    },
+    {
+      "admission_day": 1,
+      "id": "p08",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 1,
+      "id": "p09",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 4,
       "id": "p10",
       "ot": null,
       "room": "r1"
     },
     {
-      "admission_day": 0,
+      "admission_day": 12,
+      "id": "p11",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 3,
       "id": "p12",
       "ot": null,
-      "room": "r1"
+      "room": "r0"
     },
     {
-      "admission_day": 0,
-      "id": "p16",
-      "ot": null,
-      "room": "r3"
-    },
-    {
-      "admission_day": 0,
-      "id": "p19",
+      "admission_day": 10,
+      "id": "p13",
       "ot": null,
       "room": "r2"
     },
     {
-      "admission_day": 0,
-      "id": "p22",
-      "ot": null,
-      "room": "r0"
-    },
-    {
-      "admission_day": 0,
-      "id": "p24",
-      "ot": null,
-      "room": "r0"
-    },
-    {
-      "admission_day": 0,
-      "id": "p35",
+      "admission_day": 1,
+      "id": "p14",
       "ot": null,
       "room": "r4"
     },
     {
-      "admission_day": 0,
-      "id": "p37",
+      "admission_day": 11,
+      "id": "p15",
+      "ot": null,
+      "room": "r1"
+    },
+    {
+      "admission_day": 1,
+      "id": "p16",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 9,
+      "id": "p17",
+      "ot": null,
+      "room": "r4"
+    },
+    {
+      "admission_day": 5,
+      "id": "p18",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 1,
+      "id": "p19",
+      "ot": null,
+      "room": "r1"
+    },
+    {
+      "admission_day": 16,
+      "id": "p20",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 8,
+      "id": "p22",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 3,
+      "id": "p23",
+      "ot": null,
+      "room": "r4"
+    },
+    {
+      "admission_day": 7,
+      "id": "p24",
+      "ot": null,
+      "room": "r1"
+    },
+    {
+      "admission_day": 13,
+      "id": "p25",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 11,
+      "id": "p26",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 1,
+      "id": "p27",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 14,
+      "id": "p28",
+      "ot": null,
+      "room": "r1"
+    },
+    {
+      "admission_day": 6,
+      "id": "p29",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 15,
+      "id": "p30",
       "ot": null,
       "room": "r3"
     },
     {
-      "admission_day": 0,
+      "admission_day": 5,
+      "id": "p31",
+      "ot": null,
+      "room": "r1"
+    },
+    {
+      "admission_day": 9,
+      "id": "p32",
+      "ot": null,
+      "room": "r3"
+    },
+    {
+      "admission_day": 10,
+      "id": "p33",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 11,
+      "id": "p34",
+      "ot": null,
+      "room": "r3"
+    },
+    {
+      "admission_day": 7,
+      "id": "p35",
+      "ot": null,
+      "room": "r2"
+    },
+    {
+      "admission_day": 13,
+      "id": "p36",
+      "ot": null,
+      "room": "r4"
+    },
+    {
+      "admission_day": 4,
+      "id": "p37",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 7,
+      "id": "p38",
+      "ot": null,
+      "room": "r0"
+    },
+    {
+      "admission_day": 9,
+      "id": "p39",
+      "ot": null,
+      "room": "r3"
+    },
+    {
+      "admission_day": 1,
       "id": "p40",
       "ot": null,
       "room": "r2"
     },
     {
-      "admission_day": 0,
+      "admission_day": 13,
       "id": "p41",
       "ot": null,
       "room": "r0"
