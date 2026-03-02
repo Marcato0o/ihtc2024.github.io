@@ -102,6 +102,13 @@ private:
     const IHTC_Data& in;
     IHTC_Output& out;
 
+    // Number of days in the active planning horizon.
+    int horizonDays() const;
+
+    // Reset output and schedule all patients in the provided order.
+    // Returns admitted/mandatory-failed counts through output parameters.
+    void scheduleInOrder(const std::vector<int>& order, int& admitted_count, int& mandatory_failed);
+
     // --- Algorithm Phases ---
     
     // Phase 1: Sort patients by priority (urgency and "difficulty to fit")

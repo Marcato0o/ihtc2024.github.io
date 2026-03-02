@@ -9,8 +9,24 @@ using namespace std;
 IHTC_Solver::IHTC_Solver(const IHTC_Data& input_data, IHTC_Output& output_data)
     : in(input_data), out(output_data) {
     // initialize output containers based on input sizes
-    int days = in.D > 0 ? in.D : 1;
-    out.init(in.patients.size(), in.rooms.size(), in.ots.size(), days);
+    out.init(in.patients.size(), in.rooms.size(), in.ots.size(), horizonDays());
+}
+
+int IHTC_Solver::horizonDays() const {
+    return in.D > 0 ? in.D : 1;
+}
+
+void IHTC_Solver::scheduleInOrder(const std::vector<int>& order, int& admitted_count, int& mandatory_failed) {
+    // Start from a clean output state for each full scheduling attempt.
+    out.init(in.patients.size(), in.rooms.size(), in.ots.size(), horizonDays());
+
+    admitted_count = 0;
+    mandatory_failed = 0;
+    for (int patient_id : order) {
+        bool ok = schedulePatient(patient_id);
+        if (ok) admitted_count++;
+        else if (in.patients[patient_id].mandatory) mandatory_failed++;
+    }
 }
 
 void IHTC_Solver::greedySolve() {
@@ -22,18 +38,59 @@ void IHTC_Solver::greedySolve() {
 
     cout << "[SOLVER] Starting greedy solver..." << endl;
 
-    // Phase 1: compute patient order
-    vector<int> sorted_patients = sortPatientsByPriority();
-
-    // Phase 2: schedule patients one-by-one
+    // Phase 1: compute patient order and run baseline greedy schedule.
+    vector<int> best_order = sortPatientsByPriority();
     int admitted_count = 0;
     int mandatory_failed = 0;
+    scheduleInOrder(best_order, admitted_count, mandatory_failed);
 
-    for (int patient_id : sorted_patients) {
-        bool ok = schedulePatient(patient_id);
-        if (ok) admitted_count++;
-        else if (in.patients[patient_id].mandatory) mandatory_failed++;
+    // Phase 2: lightweight repair/improvement pass.
+    // Strategy: for each currently unscheduled patient, move it earlier in the order
+    // and rerun greedy; keep the change if it improves admitted count.
+    int best_admitted = admitted_count;
+    int best_mandatory_failed = mandatory_failed;
+    bool improved = true;
+    while (improved) {
+        improved = false;
+
+        vector<int> unscheduled;
+        for (int i = 0; i < (int)out.admitted.size(); ++i) {
+            if (!out.admitted[i]) unscheduled.push_back(i);
+        }
+
+        for (int pid : unscheduled) {
+            vector<int> trial_order = best_order;
+            auto it = std::find(trial_order.begin(), trial_order.end(), pid);
+            if (it == trial_order.end()) continue;
+
+            // Remove patient from current position and reinsert near the front.
+            trial_order.erase(it);
+            // Keep mandatory-first idea: place before first optional if possible.
+            size_t insert_pos = 0;
+            if (!in.patients[pid].mandatory) {
+                while (insert_pos < trial_order.size() && in.patients[trial_order[insert_pos]].mandatory) insert_pos++;
+            }
+            trial_order.insert(trial_order.begin() + static_cast<long long>(insert_pos), pid);
+
+            int trial_admitted = 0;
+            int trial_mandatory_failed = 0;
+            scheduleInOrder(trial_order, trial_admitted, trial_mandatory_failed);
+
+            bool better = false;
+            if (trial_admitted > best_admitted) better = true;
+            else if (trial_admitted == best_admitted && trial_mandatory_failed < best_mandatory_failed) better = true;
+
+            if (better) {
+                best_order = std::move(trial_order);
+                best_admitted = trial_admitted;
+                best_mandatory_failed = trial_mandatory_failed;
+                improved = true;
+            }
+        }
     }
+
+    // Ensure output corresponds to the best order found.
+    scheduleInOrder(best_order, admitted_count, mandatory_failed);
 
     cout << "[SOLVER] Patients admitted: " << admitted_count << "/" << in.patients.size() << endl;
     if (mandatory_failed > 0) {
@@ -91,13 +148,19 @@ bool IHTC_Solver::schedulePatient(int patient_id) {
     }
     if (end_d < start_d) return false;
 
-    // Iterate over days, rooms, and OTs (including "no OT" option)
+    // Iterate over days, rooms, and OTs (including "no OT" option).
+    // We keep this exhaustive local search but reduce wasted OT trials:
+    // - If surgery time is 0, only test ot = -1
+    // - If surgery time > 0 and OTs exist, only test real OTs
+    // - If surgery time > 0 and no OT exists, patient cannot be scheduled
+    bool needs_ot = p.surgery_time > 0;
+    if (needs_ot && in.ots.empty()) return false;
+
     for (int d = start_d; d <= end_d; ++d) {
         for (int r = 0; r < (int)in.rooms.size(); ++r) {
-            // allow ot = -1 (no OT) and every real OT index
-            int max_ot_loop = std::max(0, (int)in.ots.size());
-            for (int ot_iter = -1; ot_iter < max_ot_loop; ++ot_iter) {
-                int ot = ot_iter;
+            int ot_start = needs_ot ? 0 : -1;
+            int ot_end = needs_ot ? (int)in.ots.size() - 1 : -1;
+            for (int ot = ot_start; ot <= ot_end; ++ot) {
                 // Check hard constraints quickly
                 if (!out.canAssignPatient(patient_id, d, r, ot, in)) continue;
 
@@ -108,9 +171,13 @@ bool IHTC_Solver::schedulePatient(int patient_id) {
                     best_day = d;
                     best_room = r;
                     best_ot = ot;
+                    // best possible cost is 0: early stop
+                    if (min_cost <= 0.0) break;
                 }
             }
+            if (min_cost <= 0.0) break;
         }
+        if (min_cost <= 0.0) break;
     }
 
     if (best_day != -1) {
