@@ -1,7 +1,5 @@
-# --- makefile ---
-COMP_OPT = -Wall -O3 -std=c++17
+COMP_OPT = -Wall -Wfatal-errors -O3 -std=c++17
 
-# L'eseguibile finale dipende dai 3 object file
 IHTC_Test.exe: IHTC_Driver.o IHTC_Data.o IHTC_Solver.o
 	g++ -o IHTC_Test.exe IHTC_Driver.o IHTC_Data.o IHTC_Solver.o
 
