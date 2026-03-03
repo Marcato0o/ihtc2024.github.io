@@ -104,6 +104,32 @@ int main(int argc, char **argv) {
     std::vector<std::vector<std::vector<int>>> room_shift_skill(days, std::vector<std::vector<int>>(shifts, std::vector<int>(in.rooms.size(), 0)));
     std::vector<std::vector<std::vector<int>>> patients_in_room_day(in.rooms.size(), std::vector<std::vector<int>>(days));
 
+    // Include pre-existing occupants into occupancy and nurse-demand tensors.
+    std::unordered_map<std::string, int> room_name_to_idx;
+    for (int i = 0; i < (int)in.rooms.size(); ++i) room_name_to_idx[in.rooms[i].id] = i;
+    for (const auto &f : in.occupants) {
+        auto it = room_name_to_idx.find(f.room_id);
+        if (it == room_name_to_idx.end()) continue;
+        int ridx = it->second;
+        int start = std::max(0, f.admission_day);
+        int los = std::max(1, f.length_of_stay);
+        for (int dd = 0; dd < los; ++dd) {
+            int d = start + dd;
+            if (d < 0 || d >= days) continue;
+            occupied_rooms_by_day[d].insert(in.rooms[ridx].id);
+            for (int sh = 0; sh < shifts; ++sh) {
+                int idx = dd * shifts + sh;
+                int load = 1;
+                if (!f.nurse_load_per_shift.empty()) {
+                    if (idx < (int)f.nurse_load_per_shift.size()) load = f.nurse_load_per_shift[idx];
+                    else load = f.nurse_load_per_shift.back();
+                }
+                room_shift_load[d][sh][ridx] += load;
+                room_shift_skill[d][sh][ridx] = std::max(room_shift_skill[d][sh][ridx], f.min_nurse_level);
+            }
+        }
+    }
+
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         bool is_admitted = (pid < out_data.admitted.size() && out_data.admitted[pid]);
         if (!is_admitted) {
@@ -156,9 +182,6 @@ int main(int argc, char **argv) {
         raw = json::object();
     }
 
-    std::unordered_map<std::string, int> room_name_to_idx;
-    for (int i = 0; i < (int)in.rooms.size(); ++i) room_name_to_idx[in.rooms[i].id] = i;
-
     int nurse_count = 0;
     if (raw.contains("nurses") && raw["nurses"].is_array()) nurse_count = (int)raw["nurses"].size();
     std::vector<int> nurse_level(nurse_count, 0), nurse_max_load(nurse_count, 9999);
@@ -192,15 +215,16 @@ int main(int argc, char **argv) {
                     int sh_idx = shiftIndexFromName(shift);
 
                     if (day >= 0 && day < days && !occupied_rooms_by_day[day].empty()) {
-                        // Lightweight deterministic assignment: one room per nurse-shift, round-robin.
+                        // Cover all occupied rooms for this shift/day to satisfy H8.
                         std::vector<std::string> room_names(occupied_rooms_by_day[day].begin(), occupied_rooms_by_day[day].end());
-                        std::string chosen = room_names[(nurse_idx + day) % room_names.size()];
-                        asg["rooms"].push_back(chosen);
-                        auto it = room_name_to_idx.find(chosen);
-                        if (it != room_name_to_idx.end() && sh_idx >= 0 && sh_idx < shifts) {
-                            int ridx = it->second;
-                            room_shift_nurses[day][sh_idx][ridx].push_back(nurse_idx);
-                            nurse_load_by_shift[nurse_idx][day * shifts + sh_idx] += room_shift_load[day][sh_idx][ridx];
+                        for (const auto &chosen : room_names) {
+                            asg["rooms"].push_back(chosen);
+                            auto it = room_name_to_idx.find(chosen);
+                            if (it != room_name_to_idx.end() && sh_idx >= 0 && sh_idx < shifts) {
+                                int ridx = it->second;
+                                room_shift_nurses[day][sh_idx][ridx].push_back(nurse_idx);
+                                nurse_load_by_shift[nurse_idx][day * shifts + sh_idx] += room_shift_load[day][sh_idx][ridx];
+                            }
                         }
                     }
                     nurse_out["assignments"].push_back(asg);
@@ -219,13 +243,14 @@ int main(int argc, char **argv) {
                         asg["rooms"] = nlohmann::ordered_json::array();
                         if (day >= 0 && day < days && !occupied_rooms_by_day[day].empty()) {
                             std::vector<std::string> room_names(occupied_rooms_by_day[day].begin(), occupied_rooms_by_day[day].end());
-                            std::string chosen = room_names[(nurse_idx + day + sh) % room_names.size()];
-                            asg["rooms"].push_back(chosen);
-                            auto it = room_name_to_idx.find(chosen);
-                            if (it != room_name_to_idx.end() && sh >= 0 && sh < shifts) {
-                                int ridx = it->second;
-                                room_shift_nurses[day][sh][ridx].push_back(nurse_idx);
-                                nurse_load_by_shift[nurse_idx][day * shifts + sh] += room_shift_load[day][sh][ridx];
+                            for (const auto &chosen : room_names) {
+                                asg["rooms"].push_back(chosen);
+                                auto it = room_name_to_idx.find(chosen);
+                                if (it != room_name_to_idx.end() && sh >= 0 && sh < shifts) {
+                                    int ridx = it->second;
+                                    room_shift_nurses[day][sh][ridx].push_back(nurse_idx);
+                                    nurse_load_by_shift[nurse_idx][day * shifts + sh] += room_shift_load[day][sh][ridx];
+                                }
                             }
                         }
                         nurse_out["assignments"].push_back(asg);

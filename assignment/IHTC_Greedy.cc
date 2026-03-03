@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iostream>
 #include <limits>
+#include <unordered_map>
 
 namespace {
 
@@ -21,6 +22,8 @@ std::vector<int> sortPatientsByPriority(const IHTC_Input& in) {
         if (pa.mandatory != pb.mandatory) return pa.mandatory > pb.mandatory;
 
         if (pa.mandatory) {
+            if (pa.due_date != pb.due_date) return pa.due_date < pb.due_date;
+            if (pa.release_date != pb.release_date) return pa.release_date < pb.release_date;
             int window_a = pa.due_date - pa.release_date;
             int window_b = pb.due_date - pb.release_date;
             if (window_a != window_b) return window_a < window_b;
@@ -108,6 +111,24 @@ bool schedulePatient(const IHTC_Input& in, IHTC_Output& out, int patient_id) {
 void scheduleInOrder(const IHTC_Input& in, IHTC_Output& out, const std::vector<int>& order, int& admitted_count, int& mandatory_failed) {
     out.init(in.patients.size(), in.rooms.size(), in.ots.size(), horizonDays(in));
 
+    // Seed output state with occupants already present in rooms.
+    std::unordered_map<std::string, int> room_idx;
+    for (int r = 0; r < (int)in.rooms.size(); ++r) room_idx[in.rooms[r].id] = r;
+    int days = horizonDays(in);
+    for (const auto &f : in.occupants) {
+        auto it = room_idx.find(f.room_id);
+        if (it == room_idx.end()) continue;
+        int ridx = it->second;
+        int start = std::max(0, f.admission_day);
+        int los = std::max(1, f.length_of_stay);
+        for (int dd = 0; dd < los; ++dd) {
+            int d = start + dd;
+            if (d < 0 || d >= days) continue;
+            out.room_occupancy[ridx][d] += 1;
+            if (!f.sex.empty() && out.room_gender[ridx][d].empty()) out.room_gender[ridx][d] = f.sex;
+        }
+    }
+
     admitted_count = 0;
     mandatory_failed = 0;
     for (int patient_id : order) {
@@ -117,94 +138,21 @@ void scheduleInOrder(const IHTC_Input& in, IHTC_Output& out, const std::vector<i
     }
 }
 
-void assignNurses(const IHTC_Input& in, IHTC_Output& out) {
-    int days = in.D > 0 ? in.D : 1;
-    for (int d = 0; d < days; ++d) {
-        for (int shift = 0; shift < in.shifts_per_day; ++shift) {
-            std::vector<int> room_load(in.rooms.size(), 0);
-            for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-                if (!out.admitted[pid]) continue;
-                if (out.admit_day[pid] != d) continue;
-                int ridx = out.room_assigned_idx[pid];
-                if (ridx < 0 || ridx >= (int)room_load.size()) continue;
-                if (!in.patients[pid].nurse_load_per_shift.empty()) {
-                    int local = in.patients[pid].nurse_load_per_shift[shift % in.patients[pid].nurse_load_per_shift.size()];
-                    room_load[ridx] += local;
-                } else {
-                    room_load[ridx] += 1;
-                }
-            }
-
-            for (int r = 0; r < (int)in.rooms.size(); ++r) {
-                if (room_load[r] <= 0) continue;
-                for (int ni = 0; ni < (int)in.nurses.size(); ++ni) {
-                    if (in.nurses[ni].max_load >= room_load[r]) {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
 } // namespace
 
 void GreedyIHTCSolver(const IHTC_Input& in, IHTC_Output& out)
 {
     std::cout << "[SOLVER] Starting greedy solver..." << std::endl;
 
-    std::vector<int> best_order = sortPatientsByPriority(in);
+    std::vector<int> order = sortPatientsByPriority(in);
     int admitted_count = 0;
     int mandatory_failed = 0;
-    scheduleInOrder(in, out, best_order, admitted_count, mandatory_failed);
-
-    int best_admitted = admitted_count;
-    int best_mandatory_failed = mandatory_failed;
-    bool improved = true;
-    while (improved) {
-        improved = false;
-
-        std::vector<int> unscheduled;
-        for (int i = 0; i < (int)out.admitted.size(); ++i) {
-            if (!out.admitted[i]) unscheduled.push_back(i);
-        }
-
-        for (int pid : unscheduled) {
-            std::vector<int> trial_order = best_order;
-            auto it = std::find(trial_order.begin(), trial_order.end(), pid);
-            if (it == trial_order.end()) continue;
-
-            trial_order.erase(it);
-            size_t insert_pos = 0;
-            if (!in.patients[pid].mandatory) {
-                while (insert_pos < trial_order.size() && in.patients[trial_order[insert_pos]].mandatory) insert_pos++;
-            }
-            trial_order.insert(trial_order.begin() + static_cast<long long>(insert_pos), pid);
-
-            int trial_admitted = 0;
-            int trial_mandatory_failed = 0;
-            scheduleInOrder(in, out, trial_order, trial_admitted, trial_mandatory_failed);
-
-            bool better = false;
-            if (trial_admitted > best_admitted) better = true;
-            else if (trial_admitted == best_admitted && trial_mandatory_failed < best_mandatory_failed) better = true;
-
-            if (better) {
-                best_order = std::move(trial_order);
-                best_admitted = trial_admitted;
-                best_mandatory_failed = trial_mandatory_failed;
-                improved = true;
-            }
-        }
-    }
-
-    scheduleInOrder(in, out, best_order, admitted_count, mandatory_failed);
+    scheduleInOrder(in, out, order, admitted_count, mandatory_failed);
 
     std::cout << "[SOLVER] Patients admitted: " << admitted_count << "/" << in.patients.size() << std::endl;
     if (mandatory_failed > 0) {
         std::cerr << "[WARNING] Mandatory patients not admitted: " << mandatory_failed << std::endl;
     }
 
-    assignNurses(in, out);
-    std::cout << "[SOLVER] Nurse assignment finished." << std::endl;
+    std::cout << "[SOLVER] Greedy pass finished." << std::endl;
 }

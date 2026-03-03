@@ -3,7 +3,6 @@
 #include <iostream>
 #include <sstream>
 #include <nlohmann/json.hpp>
-#include "IHTC_Greedy.hh"
 
 using namespace std;
 using json = nlohmann::json;
@@ -79,6 +78,7 @@ bool IHTC_Input::loadInstance(const std::string &path) {
     rooms.clear();
     nurses.clear();
     surgeons.clear();
+    occupants.clear();
     ots.clear();
     weights.clear();
     D = 0;
@@ -102,8 +102,15 @@ bool IHTC_Input::loadInstance(const std::string &path) {
             OT o;
             o.id = try_get_string(jo, {"id","ot_id","otId","name"}, "");
             o.daily_capacity = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
+            if (D > 0) o.daily_capacity_by_day.assign(D, o.daily_capacity);
             if (jo.contains("unavailable_days") && jo["unavailable_days"].is_array()) {
-                for (auto &d : jo["unavailable_days"]) if (d.is_number_integer()) o.unavailable_days.push_back(d.get<int>());
+                for (auto &d : jo["unavailable_days"]) {
+                    if (d.is_number_integer()) {
+                        int day = d.get<int>();
+                        o.unavailable_days.push_back(day);
+                        if (day >= 0 && day < (int)o.daily_capacity_by_day.size()) o.daily_capacity_by_day[day] = 0;
+                    }
+                }
             }
             ots.push_back(std::move(o));
         }
@@ -115,14 +122,18 @@ bool IHTC_Input::loadInstance(const std::string &path) {
             o.id = try_get_string(jo, {"id","ot_id","otId","name"}, "");
             if (jo.contains("availability") && jo["availability"].is_array()) {
                 int max_cap = 0;
+                o.daily_capacity_by_day.assign(jo["availability"].size(), 0);
                 for (size_t d = 0; d < jo["availability"].size(); ++d) {
                     int cap = jo["availability"][d].is_number_integer() ? jo["availability"][d].get<int>() : 0;
+                    o.daily_capacity_by_day[d] = cap;
                     if (cap > max_cap) max_cap = cap;
                     if (cap <= 0) o.unavailable_days.push_back((int)d);
                 }
+                if (D == 0) D = (int)o.daily_capacity_by_day.size();
                 o.daily_capacity = max_cap;
             } else {
                 o.daily_capacity = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
+                if (D > 0) o.daily_capacity_by_day.assign(D, o.daily_capacity);
             }
             ots.push_back(std::move(o));
         }
@@ -167,9 +178,18 @@ bool IHTC_Input::loadInstance(const std::string &path) {
             s.max_daily_time = try_get_int(js, {"max_daily_time","max","daily_time"}, 0);
             if (s.max_daily_time == 0 && js.contains("max_surgery_time") && js["max_surgery_time"].is_array()) {
                 int mx = 0;
-                for (const auto &v : js["max_surgery_time"]) if (v.is_number_integer()) mx = std::max(mx, v.get<int>());
+                s.daily_max_time.assign(js["max_surgery_time"].size(), 0);
+                for (size_t d = 0; d < js["max_surgery_time"].size(); ++d) {
+                    const auto &v = js["max_surgery_time"][d];
+                    if (v.is_number_integer()) {
+                        int val = v.get<int>();
+                        s.daily_max_time[d] = val;
+                        mx = std::max(mx, val);
+                    }
+                }
                 s.max_daily_time = mx;
             }
+            if (s.daily_max_time.empty() && D > 0) s.daily_max_time.assign(D, s.max_daily_time);
             surgeons.push_back(std::move(s));
         }
     }
@@ -221,6 +241,28 @@ bool IHTC_Input::loadInstance(const std::string &path) {
         }
     }
 
+    // Occupants already in hospital at start horizon
+    if (j.contains("occupants") && j["occupants"].is_array()) {
+        for (const auto &jo : j["occupants"]) {
+            Occupant o;
+            o.id = try_get_string(jo, {"id","occupant_id","name"}, "");
+            o.room_id = try_get_string(jo, {"room_id","roomId","room"}, "");
+            o.sex = try_get_string(jo, {"sex","gender"}, "");
+            o.admission_day = try_get_int(jo, {"admission_day","admissionDay","day"}, 0);
+            o.length_of_stay = try_get_int(jo, {"lengthOfStay","length_of_stay","los","stay"}, 1);
+
+            if (jo.contains("workload_produced") && jo["workload_produced"].is_array()) {
+                for (const auto &v : jo["workload_produced"]) if (v.is_number()) o.nurse_load_per_shift.push_back(v.get<int>());
+            }
+            if (jo.contains("skill_level_required") && jo["skill_level_required"].is_array()) {
+                int req = 0;
+                for (const auto &v : jo["skill_level_required"]) if (v.is_number_integer()) req = std::max(req, v.get<int>());
+                o.min_nurse_level = req;
+            }
+            occupants.push_back(std::move(o));
+        }
+    }
+
     // Weights
     if (j.contains("weights") && j["weights"].is_object()) {
         for (auto it = j["weights"].begin(); it != j["weights"].end(); ++it) {
@@ -229,32 +271,5 @@ bool IHTC_Input::loadInstance(const std::string &path) {
         }
     }
 
-    return true;
-}
-
-bool IHTC_Input::writeSolution(const std::string &path) const {
-    std::ofstream out(path);
-    if (!out) {
-        std::cerr << "Failed to write solution: " << path << "\n";
-        return false;
-    }
-    // Minimal JSON output: list admitted patient ids (placeholder)
-    json outj;
-    outj["admitted"] = json::array();
-    for (const auto &p : patients) {
-        outj["admitted"].push_back({{"id", p.id}});
-    }
-    out << outj.dump(2) << std::endl;
-    return true;
-}
-
-bool IHTC_Input::runGreedySolver() {
-    // Run the free greedy solver using this data and report admitted count.
-    IHTC_Output out_data;
-    GreedyIHTCSolver(*this, out_data);
-
-    size_t admitted = 0;
-    for (bool a : out_data.admitted) if (a) admitted++;
-    std::cout << "runGreedySolver: admitted " << admitted << "/" << out_data.admitted.size() << " patients." << std::endl;
     return true;
 }
