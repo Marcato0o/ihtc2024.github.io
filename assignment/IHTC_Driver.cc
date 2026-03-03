@@ -1,5 +1,5 @@
 #include "IHTC_Data.hh"
-#include "IHTC_Solver.hh"
+#include "IHTC_Greedy.hh"
 #include <iostream>
 #include <fstream>
 #include <unordered_map>
@@ -22,25 +22,24 @@ int main(int argc, char **argv) {
     const std::string inst = argv[1];
     const std::string out = argv[2];
 
-    IHTC_Data data;
-    if (!data.loadInstance(inst)) {
+    IHTC_Input in;
+    if (!in.loadInstance(inst)) {
         std::cerr << "Error loading instance.\n";
         return 2;
     }
     // Print parsing summary
     std::cout << "Parsed instance summary:\n";
-    std::cout << "  patients: " << data.patients.size() << "\n";
-    std::cout << "  rooms:    " << data.rooms.size() << "\n";
-    std::cout << "  nurses:   " << data.nurses.size() << "\n";
-    std::cout << "  surgeons:" << data.surgeons.size() << "\n";
-    std::cout << "  OTs:      " << data.ots.size() << "\n";
-    std::cout << "  days D:   " << data.D << "\n";
-    std::cout << "  shifts/d: " << data.shifts_per_day << "\n";
+    std::cout << "  patients: " << in.patients.size() << "\n";
+    std::cout << "  rooms:    " << in.rooms.size() << "\n";
+    std::cout << "  nurses:   " << in.nurses.size() << "\n";
+    std::cout << "  surgeons:" << in.surgeons.size() << "\n";
+    std::cout << "  OTs:      " << in.ots.size() << "\n";
+    std::cout << "  days D:   " << in.D << "\n";
+    std::cout << "  shifts/d: " << in.shifts_per_day << "\n";
 
-    // Run greedy solver (use solver directly so we can access output)
+    // Run greedy solver via WL-style free function
     IHTC_Output out_data;
-    IHTC_Solver solver(data, out_data);
-    solver.greedySolve();
+    GreedyIHTCSolver(in, out_data);
 
     // Build solution JSON in the expected structure:
     // {
@@ -53,21 +52,21 @@ int main(int argc, char **argv) {
     sol["patients"] = nlohmann::ordered_json::array();
     sol["nurses"] = nlohmann::ordered_json::array();
     sol["costs"] = nlohmann::ordered_json::array();
-    for (size_t pid = 0; pid < data.patients.size(); ++pid) {
+    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         nlohmann::ordered_json ja = nlohmann::ordered_json::object();
-        ja["id"] = data.patients[pid].id;
+        ja["id"] = in.patients[pid].id;
 
         bool is_admitted = (pid < out_data.admitted.size() && out_data.admitted[pid]);
         if (is_admitted) {
             ja["admission_day"] = out_data.admit_day[pid];
 
-            if (out_data.room_assigned_idx[pid] >= 0 && out_data.room_assigned_idx[pid] < (int)data.rooms.size())
-                ja["room"] = data.rooms[out_data.room_assigned_idx[pid]].id;
+            if (out_data.room_assigned_idx[pid] >= 0 && out_data.room_assigned_idx[pid] < (int)in.rooms.size())
+                ja["room"] = in.rooms[out_data.room_assigned_idx[pid]].id;
             else
                 ja["room"] = nullptr;
 
-            if (out_data.ot_assigned_idx[pid] >= 0 && out_data.ot_assigned_idx[pid] < (int)data.ots.size())
-                ja["operating_theater"] = data.ots[out_data.ot_assigned_idx[pid]].id;
+            if (out_data.ot_assigned_idx[pid] >= 0 && out_data.ot_assigned_idx[pid] < (int)in.ots.size())
+                ja["operating_theater"] = in.ots[out_data.ot_assigned_idx[pid]].id;
             else
                 ja["operating_theater"] = nullptr;
         } else {
@@ -78,14 +77,14 @@ int main(int argc, char **argv) {
     }
 
     // Build occupied rooms by day from admitted patients.
-    int days = data.D > 0 ? data.D : 1;
+    int days = in.D > 0 ? in.D : 1;
     std::vector<std::set<std::string>> occupied_rooms_by_day(days);
     int admitted_count = 0;
     int unscheduled_count = 0;
     int total_delay = 0;
     std::vector<std::set<std::string>> ot_by_day(days);
 
-    for (size_t pid = 0; pid < data.patients.size(); ++pid) {
+    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         bool is_admitted = (pid < out_data.admitted.size() && out_data.admitted[pid]);
         if (!is_admitted) {
             unscheduled_count++;
@@ -94,33 +93,33 @@ int main(int argc, char **argv) {
 
         admitted_count++;
         int admit_day = out_data.admit_day[pid];
-        const auto &p = data.patients[pid];
+        const auto &p = in.patients[pid];
         int los = std::max(1, p.length_of_stay);
         int room_idx = out_data.room_assigned_idx[pid];
-        if (room_idx >= 0 && room_idx < (int)data.rooms.size()) {
+        if (room_idx >= 0 && room_idx < (int)in.rooms.size()) {
             for (int d = admit_day; d < admit_day + los && d < days; ++d) {
-                if (d >= 0) occupied_rooms_by_day[d].insert(data.rooms[room_idx].id);
+                if (d >= 0) occupied_rooms_by_day[d].insert(in.rooms[room_idx].id);
             }
         }
 
         if (admit_day >= 0) total_delay += std::max(0, admit_day - p.release_date);
 
         int ot_idx = out_data.ot_assigned_idx[pid];
-        if (admit_day >= 0 && admit_day < days && ot_idx >= 0 && ot_idx < (int)data.ots.size()) {
-            ot_by_day[admit_day].insert(data.ots[ot_idx].id);
+        if (admit_day >= 0 && admit_day < days && ot_idx >= 0 && ot_idx < (int)in.ots.size()) {
+            ot_by_day[admit_day].insert(in.ots[ot_idx].id);
         }
     }
 
     // Build nurse assignments from original instance JSON when available.
     json raw;
     try {
-        raw = json::parse(data.raw_json_text);
+        raw = json::parse(in.raw_json_text);
     } catch (...) {
         raw = json::object();
     }
 
     std::unordered_map<std::string, int> room_name_to_idx;
-    for (int i = 0; i < (int)data.rooms.size(); ++i) room_name_to_idx[data.rooms[i].id] = i;
+    for (int i = 0; i < (int)in.rooms.size(); ++i) room_name_to_idx[in.rooms[i].id] = i;
 
     if (raw.contains("nurses") && raw["nurses"].is_array()) {
         int nurse_idx = 0;
@@ -152,12 +151,12 @@ int main(int argc, char **argv) {
                 }
             } else {
                 // Fallback schema: build from parsed roster if present in data.nurses.
-                if (nurse_idx < (int)data.nurses.size() && !data.nurses[nurse_idx].roster.empty()) {
-                    const auto &roster = data.nurses[nurse_idx].roster;
+                if (nurse_idx < (int)in.nurses.size() && !in.nurses[nurse_idx].roster.empty()) {
+                    const auto &roster = in.nurses[nurse_idx].roster;
                     for (int g = 0; g < (int)roster.size(); ++g) {
                         if (roster[g] <= 0) continue;
-                        int day = g / std::max(1, data.shifts_per_day);
-                        int sh = g % std::max(1, data.shifts_per_day);
+                        int day = g / std::max(1, in.shifts_per_day);
+                        int sh = g % std::max(1, in.shifts_per_day);
                         nlohmann::ordered_json asg = nlohmann::ordered_json::object();
                         asg["day"] = day;
                         asg["shift"] = shiftNameFromIndex(sh);

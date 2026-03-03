@@ -3,10 +3,14 @@
 #include <iostream>
 #include <sstream>
 #include <nlohmann/json.hpp>
-#include "IHTC_Solver.hh"
+#include "IHTC_Greedy.hh"
 
 using namespace std;
 using json = nlohmann::json;
+
+IHTC_Input::IHTC_Input(const std::string &file_name) {
+    loadInstance(file_name);
+}
 
 static std::string try_get_string(const json &j, const std::vector<std::string> &candidates, const std::string &def="") {
     for (auto &k : candidates) if (j.contains(k) && !j[k].is_null()) {
@@ -45,7 +49,7 @@ static bool try_get_bool(const json &j, const std::vector<std::string> &candidat
     return def;
 }
 
-bool IHTC_Data::loadInstance(const std::string &path) {
+bool IHTC_Input::loadInstance(const std::string &path) {
     std::ifstream in(path);
     if (!in) {
         std::cerr << "Failed to open instance: " << path << "\n";
@@ -228,7 +232,7 @@ bool IHTC_Data::loadInstance(const std::string &path) {
     return true;
 }
 
-bool IHTC_Data::writeSolution(const std::string &path) const {
+bool IHTC_Input::writeSolution(const std::string &path) const {
     std::ofstream out(path);
     if (!out) {
         std::cerr << "Failed to write solution: " << path << "\n";
@@ -244,11 +248,10 @@ bool IHTC_Data::writeSolution(const std::string &path) const {
     return true;
 }
 
-bool IHTC_Data::runGreedySolver() {
-    // Run the IHTC_Solver using this data and report admitted count.
+bool IHTC_Input::runGreedySolver() {
+    // Run the free greedy solver using this data and report admitted count.
     IHTC_Output out_data;
-    IHTC_Solver solver(*this, out_data);
-    solver.greedySolve();
+    GreedyIHTCSolver(*this, out_data);
 
     size_t admitted = 0;
     for (bool a : out_data.admitted) if (a) admitted++;
