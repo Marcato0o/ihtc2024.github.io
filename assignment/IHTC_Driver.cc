@@ -2,6 +2,7 @@
 #include "IHTC_Greedy.hh"
 #include <iostream>
 #include <fstream>
+#include <cstdlib>
 #include <unordered_map>
 #include <set>
 #include <sstream>
@@ -21,25 +22,15 @@ static int shiftIndexFromName(const std::string &name) {
     return 0;
 }
 
-static std::string ageGroupKey(const Patient &p) {
-    if (p.raw_json.contains("age_group") && !p.raw_json["age_group"].is_null()) {
-        if (p.raw_json["age_group"].is_string()) return p.raw_json["age_group"].get<std::string>();
-        if (p.raw_json["age_group"].is_number_integer()) return std::to_string(p.raw_json["age_group"].get<int>());
-    }
-    if (p.age_group >= 0) return std::to_string(p.age_group);
-    return "unknown";
-}
-
 int main(int argc, char **argv) {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " instance.json solution.json\n";
-        return 1;
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <input_file>" << std::endl;
+        std::exit(1);
     }
-    const std::string inst = argv[1];
-    const std::string out = argv[2];
+    const std::string out = "solution.json";
 
-    IHTC_Input in;
-    if (!in.loadInstance(inst)) {
+    IHTC_Input in(argv[1]);
+    if (in.patients.empty() && in.rooms.empty() && in.ots.empty() && in.nurses.empty() && in.surgeons.empty() && in.occupants.empty()) {
         std::cerr << "Error loading instance.\n";
         return 2;
     }
@@ -54,7 +45,7 @@ int main(int argc, char **argv) {
     std::cout << "  shifts/d: " << in.shifts_per_day << "\n";
 
     // Run greedy solver via WL-style free function
-    IHTC_Output out_data;
+    IHTC_Output out_data(in);
     GreedyIHTCSolver(in, out_data);
 
     // Build solution JSON in the expected structure:
@@ -96,13 +87,8 @@ int main(int argc, char **argv) {
     int days = in.D > 0 ? in.D : 1;
     int shifts = std::max(1, in.shifts_per_day);
     std::vector<std::set<std::string>> occupied_rooms_by_day(days);
-    int admitted_count = 0;
-    int unscheduled_count = 0;
-    int total_delay = 0;
-    std::vector<std::set<std::string>> ot_by_day(days);
     std::vector<std::vector<std::vector<int>>> room_shift_load(days, std::vector<std::vector<int>>(shifts, std::vector<int>(in.rooms.size(), 0)));
     std::vector<std::vector<std::vector<int>>> room_shift_skill(days, std::vector<std::vector<int>>(shifts, std::vector<int>(in.rooms.size(), 0)));
-    std::vector<std::vector<std::vector<int>>> patients_in_room_day(in.rooms.size(), std::vector<std::vector<int>>(days));
 
     // Include pre-existing occupants into occupancy and nurse-demand tensors.
     std::unordered_map<std::string, int> room_name_to_idx;
@@ -133,11 +119,9 @@ int main(int argc, char **argv) {
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         bool is_admitted = (pid < out_data.admitted.size() && out_data.admitted[pid]);
         if (!is_admitted) {
-            unscheduled_count++;
             continue;
         }
 
-        admitted_count++;
         int admit_day = out_data.admit_day[pid];
         const auto &p = in.patients[pid];
         int los = std::max(1, p.length_of_stay);
@@ -146,7 +130,6 @@ int main(int argc, char **argv) {
             for (int d = admit_day; d < admit_day + los && d < days; ++d) {
                 if (d >= 0) {
                     occupied_rooms_by_day[d].insert(in.rooms[room_idx].id);
-                    patients_in_room_day[room_idx][d].push_back((int)pid);
                 }
             }
 
@@ -164,13 +147,6 @@ int main(int argc, char **argv) {
                     room_shift_skill[d][sh][room_idx] = std::max(room_shift_skill[d][sh][room_idx], p.min_nurse_level);
                 }
             }
-        }
-
-        if (admit_day >= 0) total_delay += std::max(0, admit_day - p.release_date);
-
-        int ot_idx = out_data.ot_assigned_idx[pid];
-        if (admit_day >= 0 && admit_day < days && ot_idx >= 0 && ot_idx < (int)in.ots.size()) {
-            ot_by_day[admit_day].insert(in.ots[ot_idx].id);
         }
     }
 
@@ -263,137 +239,15 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Build costs summary string in the expected textual format.
-    // AgeMix: penalize mixed age-groups in same room/day.
-    int age_mix_cost = 0;
-    for (int r = 0; r < (int)in.rooms.size(); ++r) {
-        for (int d = 0; d < days; ++d) {
-            const auto &plist = patients_in_room_day[r][d];
-            if (plist.size() < 2) continue;
-            std::unordered_map<std::string, int> age_counts;
-            for (int pid : plist) age_counts[ageGroupKey(in.patients[pid])]++;
-            long long n = (long long)plist.size();
-            long long total_pairs = (n * (n - 1)) / 2;
-            long long same_pairs = 0;
-            for (const auto &kv : age_counts) {
-                long long c = kv.second;
-                same_pairs += (c * (c - 1)) / 2;
-            }
-            age_mix_cost += (int)std::max(0LL, total_pairs - same_pairs);
-        }
-    }
-
-    // Skill: if assigned nurse skill is below room required skill for a shift.
-    int skill_cost = 0;
-    for (int d = 0; d < days; ++d) {
-        for (int sh = 0; sh < shifts; ++sh) {
-            for (int r = 0; r < (int)in.rooms.size(); ++r) {
-                int req = room_shift_skill[d][sh][r];
-                if (req <= 0) continue;
-                for (int nidx : room_shift_nurses[d][sh][r]) {
-                    if (nidx >= 0 && nidx < (int)nurse_level.size() && nurse_level[nidx] < req) {
-                        skill_cost += (req - nurse_level[nidx]);
-                    }
-                }
-            }
-        }
-    }
-
-    // Excess: nurse assigned load above max_load per shift.
-    int excess_cost = 0;
-    for (int nidx = 0; nidx < nurse_count; ++nidx) {
-        int cap = (nidx < (int)nurse_max_load.size()) ? nurse_max_load[nidx] : 9999;
-        for (int t = 0; t < days * shifts; ++t) {
-            int over = nurse_load_by_shift[nidx][t] - cap;
-            if (over > 0) excess_cost += over;
-        }
-    }
-
-    // Continuity: each patient should be served by fewer distinct nurses across stay.
-    int continuity_cost = 0;
-    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        if (!(pid < out_data.admitted.size() && out_data.admitted[pid])) continue;
-        int day0 = out_data.admit_day[pid];
-        int ridx = out_data.room_assigned_idx[pid];
-        if (ridx < 0 || ridx >= (int)in.rooms.size()) continue;
-        int los = std::max(1, in.patients[pid].length_of_stay);
-        std::set<int> seen_nurses;
-        for (int dd = 0; dd < los; ++dd) {
-            int d = day0 + dd;
-            if (d < 0 || d >= days) continue;
-            for (int sh = 0; sh < shifts; ++sh) {
-                for (int nidx : room_shift_nurses[d][sh][ridx]) seen_nurses.insert(nidx);
-            }
-        }
-        if (!seen_nurses.empty()) continuity_cost += std::max(0, (int)seen_nurses.size() - 1);
-    }
-
-    // SurgeonTransfer: same surgeon working in multiple OTs in one day.
-    int surgeon_transfer_cost = 0;
-    std::unordered_map<std::string, std::vector<std::set<std::string>>> surgeon_ot_by_day;
-    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        if (!(pid < out_data.admitted.size() && out_data.admitted[pid])) continue;
-        int d = out_data.admit_day[pid];
-        int ot_idx = out_data.ot_assigned_idx[pid];
-        if (d < 0 || d >= days || ot_idx < 0 || ot_idx >= (int)in.ots.size()) continue;
-        const std::string &sid = in.patients[pid].surgeon_id;
-        if (sid.empty()) continue;
-        if (!surgeon_ot_by_day.count(sid)) surgeon_ot_by_day[sid] = std::vector<std::set<std::string>>(days);
-        surgeon_ot_by_day[sid][d].insert(in.ots[ot_idx].id);
-    }
-    for (const auto &kv : surgeon_ot_by_day) {
-        for (int d = 0; d < days; ++d) {
-            int sz = (int)kv.second[d].size();
-            if (sz > 1) surgeon_transfer_cost += (sz - 1);
-        }
-    }
-
-    auto getWeight = [&](const std::string &named_key, const std::string &short_key, int fallback) -> int {
-        auto it_named = in.weights.find(named_key);
-        if (it_named != in.weights.end()) return it_named->second;
-        auto it_short = in.weights.find(short_key);
-        if (it_short != in.weights.end()) return it_short->second;
-        return fallback;
-    };
-
-    // Soft constraint weights from instance JSON (S1..S8).
-    // S1: room_mixed_age
-    // S2: room_nurse_skill
-    // S3: continuity_of_care
-    // S4: nurse_eccessive_workload
-    // S5: open_operating_theater
-    // S6: surgeon_transfer
-    // S7: patient_delay
-    // S8: unscheduled_optional
-    int wS1 = getWeight("room_mixed_age", "S1", 5);
-    int wS2 = getWeight("room_nurse_skill", "S2", 1);
-    int wS3 = getWeight("continuity_of_care", "S3", 1);
-    int wS4 = getWeight("nurse_eccessive_workload", "S4", 1);
-    int wS5 = getWeight("open_operating_theater", "S5", 10);
-    int wS6 = getWeight("surgeon_transfer", "S6", 1);
-    int wS7 = getWeight("patient_delay", "S7", 5);
-    int wS8 = getWeight("unscheduled_optional", "S8", 100);
-
-    int unscheduled_optional_count = 0;
-    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        bool is_admitted = (pid < out_data.admitted.size() && out_data.admitted[pid]);
-        if (!is_admitted && !in.patients[pid].mandatory) unscheduled_optional_count++;
-    }
-
-    int delay_cost = total_delay * wS7;
-    int unscheduled_cost = unscheduled_optional_count * wS8;
-    int open_ot_days = 0;
-    for (int d = 0; d < days; ++d) {
-        if (!ot_by_day[d].empty()) open_ot_days += (int)ot_by_day[d].size();
-    }
-    int open_ot_cost = open_ot_days * wS5;
-    int age_mix_weighted = age_mix_cost * wS1;
-    int skill_weighted = skill_cost * wS2;
-    int excess_weighted = excess_cost * wS4;
-    int continuity_weighted = continuity_cost * wS3;
-    int surgeon_transfer_weighted = surgeon_transfer_cost * wS6;
-
-    int total_cost = unscheduled_cost + delay_cost + open_ot_cost + age_mix_weighted + skill_weighted + excess_weighted + continuity_weighted + surgeon_transfer_weighted;
+    int age_mix_weighted = out_data.ComputeCostRoomMixedAge();
+    int skill_weighted = out_data.ComputeCostRoomNurseSkill();
+    int continuity_weighted = out_data.ComputeCostContinuityOfCare();
+    int excess_weighted = out_data.ComputeCostNurseExcessiveWorkload();
+    int open_ot_cost = out_data.ComputeCostOpenOperatingTheater();
+    int surgeon_transfer_weighted = out_data.ComputeCostSurgeonTransfer();
+    int delay_cost = out_data.ComputeCostPatientDelay();
+    int unscheduled_cost = out_data.ComputeCostUnscheduledOptional();
+    int total_cost = out_data.ComputeCostTotal();
 
     std::ostringstream cost_line;
     cost_line << "Cost: " << total_cost
