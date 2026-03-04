@@ -1,26 +1,22 @@
 #include "IHTC_Data.hh"
-#include <fstream>
+#include "json/io.hh"
+#include <algorithm>
 #include <iostream>
-#include <sstream>
 #include <set>
 #include <unordered_map>
-#include "nlohmann/json.hpp"
 
 using namespace std;
-using json = nlohmann::json;
+
+IHTC_Input::IHTC_Input() = default;
 
 IHTC_Input::IHTC_Input(const std::string &file_name) {
     loadInstance(file_name);
 }
 
 IHTC_Output::IHTC_Output(const IHTC_Input &in) {
-    BindInput(in);
+    bound_input = &in;
     int days = in.D > 0 ? in.D : 1;
     init(in.patients.size(), in.rooms.size(), in.ots.size(), days);
-}
-
-void IHTC_Output::BindInput(const IHTC_Input &in) {
-    bound_input = &in;
 }
 
 void IHTC_Output::init(size_t num_patients, size_t num_rooms, size_t num_ots, int days) {
@@ -152,19 +148,6 @@ int IHTC_Output::getOtMinutesUsed(int ot_idx, int day) const {
 
 namespace {
 
-static std::string shiftNameFromIndex(int idx) {
-    if (idx == 0) return "early";
-    if (idx == 1) return "late";
-    return "night";
-}
-
-static int shiftIndexFromName(const std::string &name) {
-    if (name == "early") return 0;
-    if (name == "late") return 1;
-    if (name == "night") return 2;
-    return 0;
-}
-
 static std::string ageGroupKey(const Patient &p) {
     if (p.raw_json.contains("age_group") && !p.raw_json["age_group"].is_null()) {
         if (p.raw_json["age_group"].is_string()) return p.raw_json["age_group"].get<std::string>();
@@ -278,18 +261,10 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
         }
     }
 
-    json raw;
-    try {
-        raw = json::parse(in.raw_json_text);
-    } catch (...) {
-        raw = json::object();
-    }
-
-    int nurse_count = 0;
-    if (raw.contains("nurses") && raw["nurses"].is_array()) nurse_count = (int)raw["nurses"].size();
+    int nurse_count = (int)in.nurses.size();
     ctx.nurse_level.assign(nurse_count, 0);
     ctx.nurse_max_load.assign(nurse_count, 9999);
-    for (int i = 0; i < nurse_count && i < (int)in.nurses.size(); ++i) {
+    for (int i = 0; i < nurse_count; ++i) {
         ctx.nurse_level[i] = in.nurses[i].level;
         ctx.nurse_max_load[i] = in.nurses[i].max_load;
     }
@@ -297,50 +272,17 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
     ctx.nurse_load_by_shift.assign(nurse_count, std::vector<int>(ctx.days * ctx.shifts, 0));
     ctx.room_shift_nurses.assign(ctx.days, std::vector<std::vector<std::vector<int>>>(ctx.shifts, std::vector<std::vector<int>>(in.rooms.size())));
 
-    if (raw.contains("nurses") && raw["nurses"].is_array()) {
-        int nurse_idx = 0;
-        for (const auto &jn : raw["nurses"]) {
-            if (jn.contains("working_shifts") && jn["working_shifts"].is_array()) {
-                for (const auto &ws : jn["working_shifts"]) {
-                    int day = (ws.contains("day") && ws["day"].is_number_integer()) ? ws["day"].get<int>() : -1;
-                    std::string shift = (ws.contains("shift") && ws["shift"].is_string()) ? ws["shift"].get<std::string>() : "early";
-                    int sh_idx = shiftIndexFromName(shift);
-
-                    if (day >= 0 && day < ctx.days && !ctx.occupied_rooms_by_day[day].empty()) {
-                        std::vector<std::string> room_names(ctx.occupied_rooms_by_day[day].begin(), ctx.occupied_rooms_by_day[day].end());
-                        for (const auto &chosen : room_names) {
-                            auto it = room_name_to_idx.find(chosen);
-                            if (it != room_name_to_idx.end() && sh_idx >= 0 && sh_idx < ctx.shifts) {
-                                int ridx = it->second;
-                                ctx.room_shift_nurses[day][sh_idx][ridx].push_back(nurse_idx);
-                                if (nurse_idx >= 0 && nurse_idx < nurse_count) {
-                                    ctx.nurse_load_by_shift[nurse_idx][day * ctx.shifts + sh_idx] += ctx.room_shift_load[day][sh_idx][ridx];
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if (nurse_idx < (int)in.nurses.size() && !in.nurses[nurse_idx].roster.empty()) {
-                const auto &roster = in.nurses[nurse_idx].roster;
-                for (int g = 0; g < (int)roster.size(); ++g) {
-                    if (roster[g] <= 0) continue;
-                    int day = g / std::max(1, in.shifts_per_day);
-                    int sh = g % std::max(1, in.shifts_per_day);
-                    if (day >= 0 && day < ctx.days && !ctx.occupied_rooms_by_day[day].empty()) {
-                        std::vector<std::string> room_names(ctx.occupied_rooms_by_day[day].begin(), ctx.occupied_rooms_by_day[day].end());
-                        for (const auto &chosen : room_names) {
-                            auto it = room_name_to_idx.find(chosen);
-                            if (it != room_name_to_idx.end() && sh >= 0 && sh < ctx.shifts) {
-                                int ridx = it->second;
-                                ctx.room_shift_nurses[day][sh][ridx].push_back(nurse_idx);
-                                ctx.nurse_load_by_shift[nurse_idx][day * ctx.shifts + sh] += ctx.room_shift_load[day][sh][ridx];
-                            }
-                        }
-                    }
-                }
-            }
-            nurse_idx++;
-        }
+    for (const auto &na : out.nurse_assignments) {
+        if (na.nurse_idx < 0 || na.nurse_idx >= nurse_count) continue;
+        if (na.day < 0 || na.day >= ctx.days) continue;
+        if (na.shift < 0 || na.shift >= ctx.shifts) continue;
+        if (na.room_idx < 0 || na.room_idx >= (int)in.rooms.size()) continue;
+        int n = na.nurse_idx;
+        int d = na.day;
+        int sh = na.shift;
+        int r = na.room_idx;
+        ctx.room_shift_nurses[d][sh][r].push_back(n);
+        ctx.nurse_load_by_shift[n][d * ctx.shifts + sh] += ctx.room_shift_load[d][sh][r];
     }
 
     return ctx;
@@ -493,265 +435,37 @@ int IHTC_Output::ComputeCostTotal() const {
         + ComputeCostUnscheduledOptional();
 }
 
-static std::string try_get_string(const json &j, const std::vector<std::string> &candidates, const std::string &def="") {
-    for (auto &k : candidates) if (j.contains(k) && !j[k].is_null()) {
-        if (j[k].is_string()) return j[k].get<std::string>();
-        try {
-            return j[k].dump();
-        } catch(...) { return def; }
-    }
-    return def;
+void IHTC_Output::printCosts() const {
+    int age_mix_weighted = ComputeCostRoomMixedAge();
+    int skill_weighted = ComputeCostRoomNurseSkill();
+    int continuity_weighted = ComputeCostContinuityOfCare();
+    int excess_weighted = ComputeCostNurseExcessiveWorkload();
+    int open_ot_cost = ComputeCostOpenOperatingTheater();
+    int surgeon_transfer_weighted = ComputeCostSurgeonTransfer();
+    int delay_cost = ComputeCostPatientDelay();
+    int unscheduled_cost = ComputeCostUnscheduledOptional();
+    int total_cost = ComputeCostTotal();
+
+    std::cout << "Cost: " << total_cost
+              << ", Unscheduled: " << unscheduled_cost
+              << ",  Delay: " << delay_cost
+              << ",  OpenOT: " << open_ot_cost
+              << ",  AgeMix: " << age_mix_weighted
+              << ",  Skill: " << skill_weighted
+              << ",  Excess: " << excess_weighted
+              << ",  Continuity: " << continuity_weighted
+              << ",  SurgeonTransfer: " << surgeon_transfer_weighted
+              << std::endl;
 }
 
-static int try_get_int(const json &j, const std::vector<std::string> &candidates, int def=0) {
-    for (auto &k : candidates) if (j.contains(k) && !j[k].is_null()) {
-        const json &v = j[k];
-        if (v.is_number_integer()) return v.get<int>();
-        if (v.is_number_float()) return static_cast<int>(v.get<double>());
-        if (v.is_string()) {
-            try { return std::stoi(v.get<std::string>()); } catch(...) {}
-        }
+void IHTC_Output::writeJSON(const std::string& filename) const {
+    if (!bound_input) {
+        std::cerr << "writeJSON: input is not bound to output state." << std::endl;
+        return;
     }
-    return def;
-}
-
-static bool try_get_bool(const json &j, const std::vector<std::string> &candidates, bool def=false) {
-    for (auto &k : candidates) if (j.contains(k) && !j[k].is_null()) {
-        const json &v = j[k];
-        if (v.is_boolean()) return v.get<bool>();
-        if (v.is_number_integer()) return v.get<int>() != 0;
-        if (v.is_string()) {
-            std::string s = v.get<std::string>();
-            for (auto &c: s) c = tolower(c);
-            if (s=="true" || s=="1" || s=="yes") return true;
-            if (s=="false" || s=="0" || s=="no") return false;
-        }
-    }
-    return def;
+    jsonio::write_solution(*bound_input, *this, filename);
 }
 
 bool IHTC_Input::loadInstance(const std::string &path) {
-    std::ifstream in(path);
-    if (!in) {
-        std::cerr << "Failed to open instance: " << path << "\n";
-        return false;
-    }
-
-    // read whole file
-    std::stringstream ss;
-    ss << in.rdbuf();
-    raw_json_text = ss.str();
-
-    if (raw_json_text.empty()) {
-        std::cerr << "Instance file is empty: " << path << "\n";
-        return false;
-    }
-
-    json j;
-    try {
-        j = json::parse(raw_json_text);
-    } catch (const std::exception &e) {
-        std::cerr << "JSON parse error: " << e.what() << "\n";
-        return false;
-    }
-
-    // clear previous
-    patients.clear();
-    rooms.clear();
-    nurses.clear();
-    surgeons.clear();
-    occupants.clear();
-    ots.clear();
-    weights.clear();
-    D = 0;
-
-    // Horizon / meta
-    if (j.contains("D") && j["D"].is_number_integer()) D = j["D"].get<int>();
-    else if (j.contains("days") && j["days"].is_number_integer()) D = j["days"].get<int>();
-    else if (j.contains("horizon") && j["horizon"].is_number_integer()) D = j["horizon"].get<int>();
-    else if (j.contains("HORIZON") && j["HORIZON"].is_object()) {
-        const auto &h = j["HORIZON"];
-        if (h.contains("D") && h["D"].is_number_integer()) D = h["D"].get<int>();
-        else if (h.contains("days") && h["days"].is_number_integer()) D = h["days"].get<int>();
-    }
-
-    if (j.contains("shifts_per_day")) shifts_per_day = try_get_int(j, {"shifts_per_day","shiftsPerDay","S"}, shifts_per_day);
-    else if (j.contains("shift_types") && j["shift_types"].is_array()) shifts_per_day = (int)j["shift_types"].size();
-
-    // Operating theatres (OT)
-    if (j.contains("ots") && j["ots"].is_array()) {
-        for (const auto &jo : j["ots"]) {
-            OT o;
-            o.id = try_get_string(jo, {"id","ot_id","otId","name"}, "");
-            o.daily_capacity = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
-            if (D > 0) o.daily_capacity_by_day.assign(D, o.daily_capacity);
-            if (jo.contains("unavailable_days") && jo["unavailable_days"].is_array()) {
-                for (auto &d : jo["unavailable_days"]) {
-                    if (d.is_number_integer()) {
-                        int day = d.get<int>();
-                        o.unavailable_days.push_back(day);
-                        if (day >= 0 && day < (int)o.daily_capacity_by_day.size()) o.daily_capacity_by_day[day] = 0;
-                    }
-                }
-            }
-            ots.push_back(std::move(o));
-        }
-    }
-    // Alternative key used in test instances
-    else if (j.contains("operating_theaters") && j["operating_theaters"].is_array()) {
-        for (const auto &jo : j["operating_theaters"]) {
-            OT o;
-            o.id = try_get_string(jo, {"id","ot_id","otId","name"}, "");
-            if (jo.contains("availability") && jo["availability"].is_array()) {
-                int max_cap = 0;
-                o.daily_capacity_by_day.assign(jo["availability"].size(), 0);
-                for (size_t d = 0; d < jo["availability"].size(); ++d) {
-                    int cap = jo["availability"][d].is_number_integer() ? jo["availability"][d].get<int>() : 0;
-                    o.daily_capacity_by_day[d] = cap;
-                    if (cap > max_cap) max_cap = cap;
-                    if (cap <= 0) o.unavailable_days.push_back((int)d);
-                }
-                if (D == 0) D = (int)o.daily_capacity_by_day.size();
-                o.daily_capacity = max_cap;
-            } else {
-                o.daily_capacity = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
-                if (D > 0) o.daily_capacity_by_day.assign(D, o.daily_capacity);
-            }
-            ots.push_back(std::move(o));
-        }
-    }
-
-    // Rooms
-    if (j.contains("rooms") && j["rooms"].is_array()) {
-        for (const auto &jr : j["rooms"]) {
-            Room r;
-            r.id = try_get_string(jr, {"id","room_id","roomId","name"}, "");
-            r.capacity = try_get_int(jr, {"capacity","beds","size"}, 1);
-            if (jr.contains("incompatible") && jr["incompatible"].is_array()) {
-                for (auto &x : jr["incompatible"]) if (x.is_string()) r.incompatible_patients.push_back(x.get<std::string>());
-            }
-            if (jr.contains("unavailable_days") && jr["unavailable_days"].is_array()) {
-                for (auto &d : jr["unavailable_days"]) if (d.is_number_integer()) r.unavailable_days.push_back(d.get<int>());
-            }
-            rooms.push_back(std::move(r));
-        }
-    }
-
-    // Nurses
-    if (j.contains("nurses") && j["nurses"].is_array()) {
-        for (const auto &jn : j["nurses"]) {
-            Nurse n;
-            n.id = try_get_string(jn, {"id","nurse_id","nurseId","name"}, "");
-            n.level = try_get_int(jn, {"level","competence","skillLevel","skill_level"}, 0);
-            n.max_load = try_get_int(jn, {"max_load","maxLoad","max"}, 0);
-            if (jn.contains("roster") && jn["roster"].is_array()) {
-                for (auto &r : jn["roster"]) n.roster.push_back(r.is_number() ? r.get<int>() : 0);
-            }
-            if (n.max_load == 0) n.max_load = 9999;
-            nurses.push_back(std::move(n));
-        }
-    }
-
-    // Surgeons
-    if (j.contains("surgeons") && j["surgeons"].is_array()) {
-        for (const auto &js : j["surgeons"]) {
-            Surgeon s;
-            s.id = try_get_string(js, {"id","surgeon_id","surgeonId","name"}, "");
-            s.max_daily_time = try_get_int(js, {"max_daily_time","max","daily_time"}, 0);
-            if (s.max_daily_time == 0 && js.contains("max_surgery_time") && js["max_surgery_time"].is_array()) {
-                int mx = 0;
-                s.daily_max_time.assign(js["max_surgery_time"].size(), 0);
-                for (size_t d = 0; d < js["max_surgery_time"].size(); ++d) {
-                    const auto &v = js["max_surgery_time"][d];
-                    if (v.is_number_integer()) {
-                        int val = v.get<int>();
-                        s.daily_max_time[d] = val;
-                        mx = std::max(mx, val);
-                    }
-                }
-                s.max_daily_time = mx;
-            }
-            if (s.daily_max_time.empty() && D > 0) s.daily_max_time.assign(D, s.max_daily_time);
-            surgeons.push_back(std::move(s));
-        }
-    }
-
-    // Patients (core fields)
-    if (j.contains("patients") && j["patients"].is_array()) {
-        for (const auto &jp : j["patients"]) {
-            Patient p;
-            p.raw_json = jp;
-            p.id = try_get_string(jp, {"id","patient_id","patientId","name"}, "");
-            p.mandatory = try_get_bool(jp, {"mandatory","isMandatory"}, false);
-            // some instances use "optional" instead
-            p.optional = try_get_bool(jp, {"optional","isOptional"}, false);
-            p.release_date = try_get_int(jp, {"releaseDate","release_date","release","earliest","surgery_release_day"}, 0);
-            p.due_date = try_get_int(jp, {"dueDate","due_date","due","latest","surgery_due_day"}, D > 0 ? (D - 1) : 0);
-            p.length_of_stay = try_get_int(jp, {"lengthOfStay","length_of_stay","los","stay"}, 1);
-            p.age_group = try_get_int(jp, {"age_group","ageGroup","age"}, -1);
-            p.sex = try_get_string(jp, {"sex","gender"}, "");
-            p.surgery_time = try_get_int(jp, {"surgery_time","surgeryTime","surgery","operating_time","operatingTime","surgery_duration"}, 0);
-            p.surgeon_id = try_get_string(jp, {"surgeon","surgeon_id","surgeonId","assigned_surgeon"}, "");
-            p.min_nurse_level = try_get_int(jp, {"min_nurse_level","minLevel","required_nurse_level"}, 0);
-
-            // nurse load per shift/turn may be named variously
-            if (jp.contains("nurse_load") && jp["nurse_load"].is_array()) {
-                for (auto &v : jp["nurse_load"]) if (v.is_number()) p.nurse_load_per_shift.push_back(v.get<int>());
-            } else if (jp.contains("loads") && jp["loads"].is_array()) {
-                for (auto &v : jp["loads"]) if (v.is_number()) p.nurse_load_per_shift.push_back(v.get<int>());
-            } else if (jp.contains("workload") && jp["workload"].is_array()) {
-                for (auto &v : jp["workload"]) if (v.is_number()) p.nurse_load_per_shift.push_back(v.get<int>());
-            } else if (jp.contains("workload_produced") && jp["workload_produced"].is_array()) {
-                for (auto &v : jp["workload_produced"]) if (v.is_number()) p.nurse_load_per_shift.push_back(v.get<int>());
-            }
-
-            if (jp.contains("incompatible_rooms") && jp["incompatible_rooms"].is_array()) {
-                for (auto &x : jp["incompatible_rooms"]) if (x.is_string()) p.incompatible_rooms.push_back(x.get<std::string>());
-            } else if (jp.contains("incompatible") && jp["incompatible"].is_array()) {
-                for (auto &x : jp["incompatible"]) if (x.is_string()) p.incompatible_rooms.push_back(x.get<std::string>());
-            } else if (jp.contains("incompatible_room_ids") && jp["incompatible_room_ids"].is_array()) {
-                for (auto &x : jp["incompatible_room_ids"]) if (x.is_string()) p.incompatible_rooms.push_back(x.get<std::string>());
-            }
-
-            if (p.min_nurse_level == 0 && jp.contains("skill_level_required") && jp["skill_level_required"].is_array()) {
-                int req = 0;
-                for (const auto &v : jp["skill_level_required"]) if (v.is_number_integer()) req = std::max(req, v.get<int>());
-                p.min_nurse_level = req;
-            }
-
-            patients.push_back(std::move(p));
-        }
-    }
-
-    // Occupants already in hospital at start horizon
-    if (j.contains("occupants") && j["occupants"].is_array()) {
-        for (const auto &jo : j["occupants"]) {
-            Occupant o;
-            o.id = try_get_string(jo, {"id","occupant_id","name"}, "");
-            o.room_id = try_get_string(jo, {"room_id","roomId","room"}, "");
-            o.sex = try_get_string(jo, {"sex","gender"}, "");
-            o.admission_day = try_get_int(jo, {"admission_day","admissionDay","day"}, 0);
-            o.length_of_stay = try_get_int(jo, {"lengthOfStay","length_of_stay","los","stay"}, 1);
-
-            if (jo.contains("workload_produced") && jo["workload_produced"].is_array()) {
-                for (const auto &v : jo["workload_produced"]) if (v.is_number()) o.nurse_load_per_shift.push_back(v.get<int>());
-            }
-            if (jo.contains("skill_level_required") && jo["skill_level_required"].is_array()) {
-                int req = 0;
-                for (const auto &v : jo["skill_level_required"]) if (v.is_number_integer()) req = std::max(req, v.get<int>());
-                o.min_nurse_level = req;
-            }
-            occupants.push_back(std::move(o));
-        }
-    }
-
-    // Weights
-    if (j.contains("weights") && j["weights"].is_object()) {
-        for (auto it = j["weights"].begin(); it != j["weights"].end(); ++it) {
-            if (it.value().is_number_integer()) weights[it.key()] = it.value().get<int>();
-            else if (it.value().is_number()) weights[it.key()] = static_cast<int>(it.value().get<double>());
-        }
-    }
-
-    return true;
+    return jsonio::load_instance(*this, path);
 }

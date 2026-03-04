@@ -1,2 +1,9 @@
 .nojekyll
 assets/files/ihtc2024_problem_specification.pdf
+
+# Assignment build/runtime artifacts
+assignment/*.o
+assignment/IHTC_Test.exe
+assignment/Validator
+assignment/Validator.exe
+assignment/solution.json
