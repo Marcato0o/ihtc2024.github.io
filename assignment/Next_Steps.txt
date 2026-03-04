@@ -1,23 +1,26 @@
+-------------------------------------------------------------------------------------------------------
 1. Prepare Data and Move JSON Logic (Target: IHTC_Data.hh and IHTC_Data.cc)
-
+-------------------------------------------------------------------------------------------------------
 Context: We are working on the IHTP (Integrated Healthcare Timetabling Problem) in C++. I want to streamline my IHTC_Driver.cc and encapsulate the output logic.
-Task 1: Open IHTC_Data.hh. Inside the IHTC_Output struct/class, add a data structure to store nurse assignments (e.g., a 3D or 4D vector: nurse_idx -> day -> shift -> vector of room_idx). Also, add two public methods: void writeJSON(const std::string& filename) const; and void printCosts() const;.
+CRITICAL RULE: In .hh header files, you must write ONLY the one-line function declarations. Do NOT write function bodies in .hh files. ALL implementations MUST go in the corresponding .cc source files.
+Task 1: Open IHTC_Data.hh. Inside the IHTC_Output struct/class, add a flat data structure for nurse assignments: define struct NurseAssignment { int nurse_idx; int day; int shift; int room_idx; }; and add std::vector<NurseAssignment> nurse_assignments;. Then, add exactly these two one-line declarations: void writeJSON(const std::string& filename) const; and void printCosts() const;.
 Task 2: Open IHTC_Data.cc. Implement printCosts() so it calculates and prints to the terminal all the Soft costs (Total, Unscheduled, Delay, OpenOT, AgeMix, Skill, Excess, Continuity, SurgeonTransfer).
-Task 3: Still in IHTC_Data.cc, implement writeJSON(const std::string& filename). Move ALL the JSON building logic (nlohmann::ordered_json sol) currently located in IHTC_Driver.cc into this method. The method must read the internal state variables of IHTC_Output (admitted patients, rooms, assigned nurses) and write the final file. Ensure the exact JSON structure required by the validator is strictly maintained.
----------------------------
+Task 3: Still in IHTC_Data.cc, implement writeJSON(const std::string& filename) const. Move ALL the JSON building logic (nlohmann::ordered_json sol) currently located in IHTC_Driver.cc into this method. It must read the internal state of IHTC_Output and write the final file, strictly maintaining the exact JSON structure required by the validator.
+-------------------------------------------------------------------------------------------------------
 2. Implement Nurse Greedy Algorithm (Target: IHTC_Greedy.hh and IHTC_Greedy.cc)
-
-Context: My Greedy algorithm in IHTC_Greedy.cc currently solves PAS (patients) and SCP (operating theaters) but completely ignores the Nurse-to-Room Assignment (NRA).
-Fundamental Rule: The algorithm MUST remain strictly Greedy (constructive only, NO backtracking, NO local search, NO metaheuristics like Tabu Search, NO external solvers). Even if the solution is not optimal, it must be fast and make reasonable local choices.
-Task 1: Open IHTC_Greedy.cc. Create a helper function void assignNursesGreedy(const IHTC_Input& in, IHTC_Output& out);.
-Task 2: Implement the function using a constructive approach: iterate over each day, each shift, each room. If the room is occupied on that day/shift (Hard constraint H8), find the best available nurse.
-Task 3: The "Greedy" choice of the nurse must first filter for those who are on shift (checking their roster). Among the available ones, choose the one that minimizes the impact on Soft constraints (e.g., pick the nurse with the lowest current workload to minimize S4, or the one with skills closest to the requirement to minimize S2). Once chosen, save this assignment in the new nurse data structure inside IHTC_Output created previously.
-Task 4: Modify the main function GreedyIHTCSolver to call assignNursesGreedy(in, out); immediately after scheduleInOrder.
----------------------------
+-------------------------------------------------------------------------------------------------------
+Context: My Greedy algorithm in IHTC_Greedy.cc solves PAS and SCP but ignores Nurse-to-Room Assignment (NRA).
+CRITICAL RULES: > 1) The algorithm MUST remain strictly Greedy (constructive only, NO backtracking, NO local search, NO external solvers).
+2) .hh files must contain ONLY one-line declarations. Implementations go in .cc.
+Task 1: Open IHTC_Greedy.hh. Add ONLY the one-line declaration for a new helper function: void assignNursesGreedy(const IHTC_Input& in, IHTC_Output& out);.
+Task 2: Open IHTC_Greedy.cc. Implement assignNursesGreedy. Iterate constructively: for each day, each shift, each room. If the room is occupied on that day/shift (Hard constraint H8), find the best available nurse.
+Task 3: The "Greedy" choice must filter for nurses who are on shift (check roster). Choose the one that minimizes the impact on Soft constraints (e.g., lowest current workload to minimize S4, or closest skill to minimize S2). Save this in the nurse_assignments vector inside out.
+Task 4: In IHTC_Greedy.cc, modify the main function GreedyIHTCSolver to call assignNursesGreedy(in, out); immediately after scheduleInOrder.
+-------------------------------------------------------------------------------------------------------
 3. Clean up the Driver (Target: IHTC_Driver.cc)
-
-Context: Now that all JSON export logic is in IHTC_Data.cc and the nurse assignment logic (NRA) is moved to IHTC_Greedy.cc, the driver file contains a lot of dead code and disorganized logic.
-Task: Open IHTC_Driver.cc. Delete all the content of the main function and rewrite it from scratch so it is extremely lean, clean, and readable, strictly following this linear structure:
+-------------------------------------------------------------------------------------------------------
+Context: All JSON export logic is now in IHTC_Data.cc and the nurse assignment logic (NRA) is in IHTC_Greedy.cc. The driver file now contains dead code and disorganized logic.
+Task: Open IHTC_Driver.cc. Delete all the content of the main function and rewrite it from scratch. It must be extremely lean and readable, strictly following this linear structure:
 
     1. Parse command-line arguments (input_file).
 
