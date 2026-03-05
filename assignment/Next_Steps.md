@@ -1,4 +1,4 @@
-**Title:** C++ Encapsulation: IHTC_Data.hh
+## C++ Encapsulation: IHTC_Data.hh ##
 
 **Context:** I am refactoring my C++ header file `IHTC_Data.hh` for the IHTP problem. I want to strictly enforce Object-Oriented Programming (OOP) encapsulation principles and code organization.
 
@@ -18,7 +18,7 @@
 
 **Constraint:** Output ONLY the newly refactored C++ code for `IHTC_Data.hh`. Keep all function declarations as one-liners without implementations. Do not modify the function signatures.
 
-**Title:** Restructure IHTC_Greedy: Strict Header Rules and Explicit PAS/SCP/NRA Phases
+## Restructure IHTC_Greedy: Strict Header Rules and Explicit PAS/SCP/NRA Phases ##
 
 **Context:** I am refactoring `IHTC_Greedy.hh` and `IHTC_Greedy.cc`. I need to strictly enforce that `.hh` files contain ONLY one-line declarations, and `.cc` files contain all implementations. Also, I want the logic to explicitly reflect the domain sub-problems: PAS (Patient Admission), SCP (Surgical Case Planning), and NRA (Nurse-to-Room Assignment).
 
