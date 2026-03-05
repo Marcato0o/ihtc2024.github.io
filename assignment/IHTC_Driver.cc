@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
     std::cout << "  days D:   " << in.D << "\n";
 
     IHTC_Output out(in);
-    GreedyIHTCSolver(in, out);
+    GreedySolver::runFullSolver(in, out);
 
     out.printCosts();
     out.writeJSON("solution.json");

@@ -13,6 +13,10 @@ IHTC_Input::IHTC_Input(const std::string &file_name) {
     loadInstance(file_name);
 }
 
+const std::string &IHTC_Input::getRawJsonText() const {
+    return raw_json_text;
+}
+
 IHTC_Output::IHTC_Output(const IHTC_Input &in) {
     bound_input = &in;
     int days = in.D > 0 ? in.D : 1;
@@ -24,6 +28,7 @@ void IHTC_Output::init(size_t num_patients, size_t num_rooms, size_t num_ots, in
     admit_day.assign(num_patients, -1);
     room_assigned_idx.assign(num_patients, -1);
     ot_assigned_idx.assign(num_patients, -1);
+    nurse_assignments.clear();
     room_occupancy.assign(num_rooms, std::vector<int>(days, 0));
     ot_minutes_used.assign(num_ots, std::vector<int>(days, 0));
     surgeon_minutes_used.assign(0, std::vector<int>());
@@ -134,6 +139,56 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
     }
 }
 
+void IHTC_Output::seedOccupantStay(int room_idx, int admission_day, int length_of_stay, const std::string &sex) {
+    if (room_idx < 0 || room_idx >= (int)room_occupancy.size()) return;
+    if (room_occupancy.empty() || room_occupancy[room_idx].empty()) return;
+    int days = (int)room_occupancy[room_idx].size();
+    int los = std::max(1, length_of_stay);
+    int start = std::max(0, admission_day);
+    for (int dd = 0; dd < los; ++dd) {
+        int d = start + dd;
+        if (d < 0 || d >= days) continue;
+        room_occupancy[room_idx][d] += 1;
+        if (!sex.empty() && room_gender[room_idx][d].empty()) room_gender[room_idx][d] = sex;
+    }
+}
+
+void IHTC_Output::clearNurseAssignments() {
+    nurse_assignments.clear();
+}
+
+void IHTC_Output::addNurseAssignment(int nurse_idx, int day, int shift, int room_idx) {
+    nurse_assignments.push_back({nurse_idx, day, shift, room_idx});
+}
+
+bool IHTC_Output::isAdmitted(int patient_id) const {
+    return patient_id >= 0 && patient_id < (int)admitted.size() && admitted[patient_id];
+}
+
+int IHTC_Output::getAdmitDay(int patient_id) const {
+    if (patient_id < 0 || patient_id >= (int)admit_day.size()) return -1;
+    return admit_day[patient_id];
+}
+
+int IHTC_Output::getRoomAssignedIdx(int patient_id) const {
+    if (patient_id < 0 || patient_id >= (int)room_assigned_idx.size()) return -1;
+    return room_assigned_idx[patient_id];
+}
+
+int IHTC_Output::getOtAssignedIdx(int patient_id) const {
+    if (patient_id < 0 || patient_id >= (int)ot_assigned_idx.size()) return -1;
+    return ot_assigned_idx[patient_id];
+}
+
+std::vector<std::tuple<int, int, int, int>> IHTC_Output::getNurseAssignmentTuples() const {
+    std::vector<std::tuple<int, int, int, int>> tuples;
+    tuples.reserve(nurse_assignments.size());
+    for (const auto &na : nurse_assignments) {
+        tuples.emplace_back(na.nurse_idx, na.day, na.shift, na.room_idx);
+    }
+    return tuples;
+}
+
 int IHTC_Output::getRoomOccupancy(int room_idx, int day) const {
     if (room_idx < 0 || room_idx >= (int)room_occupancy.size()) return 0;
     if (day < 0 || day >= (int)room_occupancy[0].size()) return 0;
@@ -219,16 +274,16 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
     }
 
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        bool is_admitted = (pid < out.admitted.size() && out.admitted[pid]);
+        bool is_admitted = out.isAdmitted((int)pid);
         if (!is_admitted) {
             if (!in.patients[pid].mandatory) ctx.unscheduled_optional_count++;
             continue;
         }
 
-        int admit_day = out.admit_day[pid];
+        int admit_day = out.getAdmitDay((int)pid);
         const auto &p = in.patients[pid];
         int los = std::max(1, p.length_of_stay);
-        int room_idx = out.room_assigned_idx[pid];
+        int room_idx = out.getRoomAssignedIdx((int)pid);
         if (room_idx >= 0 && room_idx < (int)in.rooms.size()) {
             for (int d = admit_day; d < admit_day + los && d < ctx.days; ++d) {
                 if (d >= 0) {
@@ -255,7 +310,7 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
 
         if (admit_day >= 0) ctx.total_delay += std::max(0, admit_day - p.release_date);
 
-        int ot_idx = out.ot_assigned_idx[pid];
+        int ot_idx = out.getOtAssignedIdx((int)pid);
         if (admit_day >= 0 && admit_day < ctx.days && ot_idx >= 0 && ot_idx < (int)in.ots.size()) {
             ctx.ot_by_day[admit_day].insert(in.ots[ot_idx].id);
         }
@@ -272,15 +327,16 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
     ctx.nurse_load_by_shift.assign(nurse_count, std::vector<int>(ctx.days * ctx.shifts, 0));
     ctx.room_shift_nurses.assign(ctx.days, std::vector<std::vector<std::vector<int>>>(ctx.shifts, std::vector<std::vector<int>>(in.rooms.size())));
 
-    for (const auto &na : out.nurse_assignments) {
-        if (na.nurse_idx < 0 || na.nurse_idx >= nurse_count) continue;
-        if (na.day < 0 || na.day >= ctx.days) continue;
-        if (na.shift < 0 || na.shift >= ctx.shifts) continue;
-        if (na.room_idx < 0 || na.room_idx >= (int)in.rooms.size()) continue;
-        int n = na.nurse_idx;
-        int d = na.day;
-        int sh = na.shift;
-        int r = na.room_idx;
+    std::vector<std::tuple<int, int, int, int>> nurse_assignments = out.getNurseAssignmentTuples();
+    for (const auto &na : nurse_assignments) {
+        int n = std::get<0>(na);
+        int d = std::get<1>(na);
+        int sh = std::get<2>(na);
+        int r = std::get<3>(na);
+        if (n < 0 || n >= nurse_count) continue;
+        if (d < 0 || d >= ctx.days) continue;
+        if (sh < 0 || sh >= ctx.shifts) continue;
+        if (r < 0 || r >= (int)in.rooms.size()) continue;
         ctx.room_shift_nurses[d][sh][r].push_back(n);
         ctx.nurse_load_by_shift[n][d * ctx.shifts + sh] += ctx.room_shift_load[d][sh][r];
     }

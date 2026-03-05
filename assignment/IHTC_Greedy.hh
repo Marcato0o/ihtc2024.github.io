@@ -3,7 +3,12 @@
 
 #include "IHTC_Data.hh"
 
-void assignNursesGreedy(const IHTC_Input& in, IHTC_Output& out);
-void GreedyIHTCSolver(const IHTC_Input& in, IHTC_Output& out);
+namespace GreedySolver {
+
+void solvePASandSCP(const IHTC_Input& in, IHTC_Output& out);
+void solveNRA(const IHTC_Input& in, IHTC_Output& out);
+void runFullSolver(const IHTC_Input& in, IHTC_Output& out);
+
+} // namespace GreedySolver
 
 #endif
