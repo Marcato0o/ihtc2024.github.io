@@ -157,11 +157,18 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
             Nurse n;
             n.id = try_get_string(jn, {"id","nurse_id","nurseId","name"}, "");
             n.level = try_get_int(jn, {"level","competence","skillLevel","skill_level"}, 0);
-            n.max_load = try_get_int(jn, {"max_load","maxLoad","max"}, 0);
-            if (jn.contains("roster") && jn["roster"].is_array()) {
-                for (auto &r : jn["roster"]) n.roster.push_back(r.is_number() ? r.get<int>() : 0);
+            if (jn.contains("working_shifts") && jn["working_shifts"].is_array()) {
+                for (const auto &ws : jn["working_shifts"]) {
+                    WorkingShift w;
+                    w.day = (ws.contains("day") && ws["day"].is_number_integer()) ? ws["day"].get<int>() : 0;
+                    std::string sname = (ws.contains("shift") && ws["shift"].is_string()) ? ws["shift"].get<std::string>() : "early";
+                    if (sname == "late") w.shift = 1;
+                    else if (sname == "night") w.shift = 2;
+                    else w.shift = 0;
+                    w.max_load = (ws.contains("max_load") && ws["max_load"].is_number_integer()) ? ws["max_load"].get<int>() : 9999;
+                    n.working_shifts.push_back(w);
+                }
             }
-            if (n.max_load == 0) n.max_load = 9999;
             in.nurses.push_back(std::move(n));
         }
     }

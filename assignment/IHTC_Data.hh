@@ -38,11 +38,16 @@ struct Room {
     int capacity = 0;
 };
 
+struct WorkingShift {
+    int day = 0;
+    int shift = 0; // 0=early, 1=late, 2=night
+    int max_load = 0;
+};
+
 struct Nurse {
     std::string id;
     int level = 0;
-    std::vector<int> roster; // 0/1 per shift index
-    int max_load = 0;
+    std::vector<WorkingShift> working_shifts;
 };
 struct Surgeon {
     std::string id;

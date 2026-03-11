@@ -35,7 +35,16 @@ L'obiettivo è **minimizzare una funzione di costo** che penalizza la violazione
 **Pazienti:**
 
 - Possono essere **obbligatori** (devono essere ricoverati nel periodo) o **opzionali** (possono essere rimandati)
-- Per ogni paziente sono noti: data di rilascio (prima data possibile di ammissione), data di scadenza (solo per obbligatori), gruppo d'età, sesso, durata del ricovero, stanze incompatibili, chirurgo assegnato, durata dell'intervento, e per ogni turno del ricovero: carico di lavoro generato e livello minimo di competenza infermieristica richiesto
+- Per ogni paziente sono noti:
+    - Data di rilascio (prima data possibile di ammissione)
+    - Data di scadenza (solo per obbligatori)
+    - Gruppo d'età
+    - Sesso
+    - Durata del ricovero
+    - Stanze incompatibili
+    - Chirurgo assegnato
+    - Durata dell'intervento
+    - Per ogni turno del ricovero: carico di lavoro generato e livello minimo di competenza infermieristica richiesto
 - **Occupanti**: pazienti già presenti all'inizio del periodo, con stanza e data di ammissione già fissate
 
 ---

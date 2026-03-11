@@ -218,47 +218,24 @@ void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
         nurse_count,
         std::vector<std::vector<bool>>(days, std::vector<bool>(shifts, false))
     );
-    std::vector<bool> has_explicit_availability(nurse_count, false);
+    // per-nurse per-day per-shift max load (0 = not set, use fallback)
+    std::vector<std::vector<std::vector<int>>> nurse_shift_cap(
+        nurse_count,
+        std::vector<std::vector<int>>(days, std::vector<int>(shifts, 0))
+    );
 
     for (int n = 0; n < nurse_count; ++n) {
-        if (!in.nurses[n].roster.empty()) {
-            has_explicit_availability[n] = true;
-            for (int g = 0; g < (int)in.nurses[n].roster.size(); ++g) {
-                if (in.nurses[n].roster[g] <= 0) continue;
-                int d = g / shifts;
-                int s = g % shifts;
-                if (d >= 0 && d < days && s >= 0 && s < shifts) nurse_available[n][d][s] = true;
-            }
-        }
-    }
-
-    try {
-        nlohmann::json raw = nlohmann::json::parse(in.getRawJsonText());
-        if (raw.contains("nurses") && raw["nurses"].is_array()) {
-            int idx = 0;
-            for (const auto& jn : raw["nurses"]) {
-                if (idx >= nurse_count) break;
-                if (jn.contains("working_shifts") && jn["working_shifts"].is_array()) {
-                    has_explicit_availability[idx] = true;
-                    for (const auto& ws : jn["working_shifts"]) {
-                        int d = (ws.contains("day") && ws["day"].is_number_integer()) ? ws["day"].get<int>() : -1;
-                        std::string shift_name = (ws.contains("shift") && ws["shift"].is_string()) ? ws["shift"].get<std::string>() : "early";
-                        int s = 0;
-                        if (shift_name == "late") s = 1;
-                        else if (shift_name == "night") s = 2;
-                        if (d >= 0 && d < days && s >= 0 && s < shifts) nurse_available[idx][d][s] = true;
-                    }
-                }
-                idx++;
-            }
-        }
-    } catch (...) {
-    }
-
-    for (int n = 0; n < nurse_count; ++n) {
-        if (!has_explicit_availability[n]) {
-            for (int d = 0; d < days; ++d) {
+        if (in.nurses[n].working_shifts.empty()) {
+            // no availability info: assume available everywhere
+            for (int d = 0; d < days; ++d)
                 for (int s = 0; s < shifts; ++s) nurse_available[n][d][s] = true;
+        } else {
+            for (const auto& ws : in.nurses[n].working_shifts) {
+                int d = ws.day, s = ws.shift;
+                if (d >= 0 && d < days && s >= 0 && s < shifts) {
+                    nurse_available[n][d][s] = true;
+                    nurse_shift_cap[n][d][s] = ws.max_load;
+                }
             }
         }
     }
@@ -334,7 +311,7 @@ void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
 
                     int cur = nurse_load[d][s][n];
                     int projected = cur + demand;
-                    int cap = in.nurses[n].max_load > 0 ? in.nurses[n].max_load : 9999;
+                    int cap = nurse_shift_cap[n][d][s] > 0 ? nurse_shift_cap[n][d][s] : 9999;
                     int overload = std::max(0, projected - cap);
                     int skill_gap = std::max(0, req_skill - in.nurses[n].level);
 

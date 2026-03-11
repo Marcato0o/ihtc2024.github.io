@@ -231,7 +231,7 @@ struct SoftCostContext {
     std::vector<std::vector<std::vector<int>>> room_shift_skill;
     std::vector<std::vector<std::vector<int>>> patients_in_room_day;
     std::vector<int> nurse_level;
-    std::vector<int> nurse_max_load;
+    std::vector<std::vector<int>> nurse_max_load_by_shift; // [nurse][day*shifts+shift]
     std::vector<std::vector<int>> nurse_load_by_shift;
     std::vector<std::vector<std::vector<std::vector<int>>>> room_shift_nurses;
 };
@@ -318,10 +318,14 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
 
     int nurse_count = (int)in.nurses.size();
     ctx.nurse_level.assign(nurse_count, 0);
-    ctx.nurse_max_load.assign(nurse_count, 9999);
+    ctx.nurse_max_load_by_shift.assign(nurse_count, std::vector<int>(ctx.days * ctx.shifts, 9999));
     for (int i = 0; i < nurse_count; ++i) {
         ctx.nurse_level[i] = in.nurses[i].level;
-        ctx.nurse_max_load[i] = in.nurses[i].max_load;
+        for (const auto& ws : in.nurses[i].working_shifts) {
+            int idx = ws.day * ctx.shifts + ws.shift;
+            if (idx >= 0 && idx < ctx.days * ctx.shifts)
+                ctx.nurse_max_load_by_shift[i][idx] = ws.max_load;
+        }
     }
 
     ctx.nurse_load_by_shift.assign(nurse_count, std::vector<int>(ctx.days * ctx.shifts, 0));
@@ -421,8 +425,8 @@ int IHTC_Output::ComputeCostNurseExcessiveWorkload() const {
     SoftCostContext ctx = buildSoftCostContext(in, *this);
     int raw_cost = 0;
     for (int nidx = 0; nidx < (int)ctx.nurse_level.size(); ++nidx) {
-        int cap = (nidx < (int)ctx.nurse_max_load.size()) ? ctx.nurse_max_load[nidx] : 9999;
         for (int t = 0; t < ctx.days * ctx.shifts; ++t) {
+            int cap = (nidx < (int)ctx.nurse_max_load_by_shift.size()) ? ctx.nurse_max_load_by_shift[nidx][t] : 9999;
             int over = ctx.nurse_load_by_shift[nidx][t] - cap;
             if (over > 0) raw_cost += over;
         }

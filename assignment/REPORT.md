@@ -144,7 +144,7 @@ This remains fully greedy: no rollback and no exchange moves.
 
 ### 3.3 NRA (greedy nurse assignment)
 
-1. Build nurse availability from roster (and optional raw JSON `working_shifts` fallback).
+1. Build nurse availability and per-shift max load from parsed `working_shifts` data.
 2. Build room demand per `(day, shift, room)` from occupants + admitted patients:
    - workload
    - required minimum nurse skill
@@ -405,7 +405,7 @@ for (int d = 0; d < days; ++d) {
 
         // [6]
         int projected = nurse_load[d][s][n] + demand;
-        int cap = in.nurses[n].max_load > 0 ? in.nurses[n].max_load : 9999;
+        int cap = nurse_shift_cap[n][d][s] > 0 ? nurse_shift_cap[n][d][s] : 9999;
         int overload = std::max(0, projected - cap);
         int skill_gap = std::max(0, req_skill - in.nurses[n].level);
 
