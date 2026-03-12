@@ -1,12 +1,19 @@
 #ifndef IHTC_DATA_HH
 #define IHTC_DATA_HH
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <tuple>
 #include "nlohmann/json.hpp"
 
 using json = nlohmann::json;
+
+enum class Gender : int8_t {
+    NONE = 0,
+    A = 1,
+    B = 2
+};
 
 class IHTC_Input;
 class IHTC_Output;
@@ -23,13 +30,12 @@ struct Patient {
     int due_date = 0;
     int length_of_stay = 0;
     int age_group = -1;
-    std::string sex;
+    Gender sex = Gender::NONE;
     int surgery_time = 0; // minutes
-    std::string surgeon_id;
-    std::vector<std::string> incompatible_rooms;
+    int surgeon_idx = -1;
+    std::vector<int> incompatible_room_idxs;
     std::vector<int> nurse_load_per_shift; // per-turn load during stay
     int min_nurse_level = 0;
-    json raw_json; // store full patient JSON for later
 };
 
 struct Room {
@@ -55,8 +61,8 @@ struct Surgeon {
 
 struct Occupant {
     std::string id;
-    std::string room_id;
-    std::string sex;
+    int room_idx = -1;
+    Gender sex = Gender::NONE;
     int admission_day = 0;
     int length_of_stay = 0;
     std::vector<int> nurse_load_per_shift;
@@ -74,9 +80,6 @@ public:
     explicit IHTC_Input(const std::string &file_name);
     bool loadInstance(const std::string &path);
     const std::string &getRawJsonText() const;
-    
-    // Ritorna l'indice del chirurgo dato il suo ID, oppure -1 se non esiste
-    int getSurgeonIdx(const std::string& surgeon_id) const;
 
     std::vector<Patient> patients;
     std::vector<Room> rooms;
@@ -109,7 +112,7 @@ public:
     void init(const IHTC_Input &in);
     bool canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const;
     void assignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in);
-    void seedOccupantStay(int room_idx, int admission_day, int length_of_stay, const std::string &sex);
+    void seedOccupantStay(int room_idx, int admission_day, int length_of_stay, Gender sex);
     void clearNurseAssignments();
     void addNurseAssignment(int nurse_idx, int day, int shift, int room_idx);
     bool isAdmitted(int patient_id) const;
@@ -146,7 +149,7 @@ private:
     std::vector<std::vector<int>> room_occupancy;
     std::vector<std::vector<int>> ot_availability;
     std::vector<std::vector<int>> surgeon_availability;
-    std::vector<std::vector<std::string>> room_gender;
+    std::vector<std::vector<Gender>> room_gender;
 };
 
 #endif // IHTC_DATA_HH

@@ -17,15 +17,6 @@ const std::string &IHTC_Input::getRawJsonText() const {
     return raw_json_text;
 }
 
-int IHTC_Input::getSurgeonIdx(const std::string& surgeon_id) const {
-    for (size_t i = 0; i < surgeons.size(); ++i) {
-        if (surgeons[i].id == surgeon_id) {
-            return (int)i;
-        }
-    }
-    return -1;
-}
-
 IHTC_Output::IHTC_Output(const IHTC_Input &in) {
     bound_input = &in;
     init(in);
@@ -54,7 +45,7 @@ void IHTC_Output::init(const IHTC_Input &in) {
         surgeon_availability[i].resize(days, 0); // assicuriamo che copra l'orizzonte
     }
 
-    room_gender.assign(in.rooms.size(), std::vector<std::string>(days, ""));
+    room_gender.assign(in.rooms.size(), std::vector<Gender>(days, Gender::NONE));
 }
 
 bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const {
@@ -84,15 +75,15 @@ bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot
         if (room_occupancy[room_idx][d_idx] >= r.capacity) return false;
         
         // Politica del sesso: in una stanza non ci possono stare sessi diversi
-        if (!p.sex.empty()) {
-            const std::string &g = room_gender[room_idx][d_idx];
-            if (!g.empty() && g != p.sex) return false;
+        if (p.sex != Gender::NONE) {
+            Gender g = room_gender[room_idx][d_idx];
+            if (g != Gender::NONE && g != p.sex) return false;
         }
     }
 
     // 3. Stanze vietate per questo paziente (es. un bambino non può stare in geriatria)
-    for (const auto &bad : p.incompatible_rooms) {
-        if (bad == r.id) return false;
+    for (int bad_idx : p.incompatible_room_idxs) {
+        if (bad_idx == room_idx) return false;
     }
 
     // 4. Vincoli della Sala Operatoria (Solo se gli serve operarsi, ot_idx >= 0)
@@ -104,12 +95,10 @@ bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot
     }
 
     // 5. Vincoli del Chirurgo (Ha un limite di ore di lavoro al giorno)
-    if (!p.surgeon_id.empty()) {
-        int surgeon_idx = in.getSurgeonIdx(p.surgeon_id);
-        if (surgeon_idx >= 0 && surgeon_idx < (int)surgeon_availability.size()) {
-            if (day >= (int)surgeon_availability[surgeon_idx].size() || surgeon_availability[surgeon_idx][day] < p.surgery_time) {
-                return false;
-            }
+    if (p.surgeon_idx >= 0 && p.surgeon_idx < (int)surgeon_availability.size()) {
+        if (day >= (int)surgeon_availability[p.surgeon_idx].size()
+            || surgeon_availability[p.surgeon_idx][day] < p.surgery_time) {
+            return false;
         }
     }
 
@@ -134,7 +123,7 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
         if (dd_idx >= 0 && dd_idx < days) {
             room_occupancy[room_idx][dd_idx] += 1;
             // Se la stanza era vuota (senza genere), le assegniamo il sesso del paziente
-            if (!in.patients[patient_id].sex.empty() && room_gender[room_idx][dd_idx].empty()) {
+            if (in.patients[patient_id].sex != Gender::NONE && room_gender[room_idx][dd_idx] == Gender::NONE) {
                 room_gender[room_idx][dd_idx] = in.patients[patient_id].sex;
             }
         }
@@ -150,17 +139,15 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
 
     // 4. Aggiornamento Chirurgo
     // Se il paziente richiede un chirurgo specifico, scaliamo i minuti dalla sua disponibilità giornaliera
-    if (!in.patients[patient_id].surgeon_id.empty()) {
-        int surgeon_idx = in.getSurgeonIdx(in.patients[patient_id].surgeon_id);
-        if (surgeon_idx >= 0 && surgeon_idx < (int)surgeon_availability.size()) {
-            if (day >= 0 && day < days) {
-                surgeon_availability[surgeon_idx][day] -= in.patients[patient_id].surgery_time;
-            }
+    if (in.patients[patient_id].surgeon_idx >= 0) {
+        int surgeon_idx = in.patients[patient_id].surgeon_idx;
+        if (surgeon_idx < (int)surgeon_availability.size() && day >= 0 && day < days) {
+            surgeon_availability[surgeon_idx][day] -= in.patients[patient_id].surgery_time;
         }
     }
 }
 
-void IHTC_Output::seedOccupantStay(int room_idx, int admission_day, int length_of_stay, const std::string &sex) {
+void IHTC_Output::seedOccupantStay(int room_idx, int admission_day, int length_of_stay, Gender sex) {
     if (room_idx < 0 || room_idx >= (int)room_occupancy.size()) return;
     if (room_occupancy.empty() || room_occupancy[room_idx].empty()) return;
     int days = (int)room_occupancy[room_idx].size();
@@ -170,7 +157,7 @@ void IHTC_Output::seedOccupantStay(int room_idx, int admission_day, int length_o
         int d = start + dd;
         if (d < 0 || d >= days) continue;
         room_occupancy[room_idx][d] += 1;
-        if (!sex.empty() && room_gender[room_idx][d].empty()) room_gender[room_idx][d] = sex;
+        if (sex != Gender::NONE && room_gender[room_idx][d] == Gender::NONE) room_gender[room_idx][d] = sex;
     }
 }
 
@@ -224,15 +211,6 @@ int IHTC_Output::getOtAvailability(int ot_idx, int day) const {
 
 namespace {
 
-static std::string ageGroupKey(const Patient &p) {
-    if (p.raw_json.contains("age_group") && !p.raw_json["age_group"].is_null()) {
-        if (p.raw_json["age_group"].is_string()) return p.raw_json["age_group"].get<std::string>();
-        if (p.raw_json["age_group"].is_number_integer()) return std::to_string(p.raw_json["age_group"].get<int>());
-    }
-    if (p.age_group >= 0) return std::to_string(p.age_group);
-    return "unknown";
-}
-
 struct SoftCostContext {
     int days = 1;
     int shifts = 1;
@@ -260,13 +238,9 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
     ctx.room_shift_skill.assign(ctx.days, std::vector<std::vector<int>>(ctx.shifts, std::vector<int>(in.rooms.size(), 0)));
     ctx.patients_in_room_day.assign(in.rooms.size(), std::vector<std::vector<int>>(ctx.days));
 
-    std::unordered_map<std::string, int> room_name_to_idx;
-    for (int i = 0; i < (int)in.rooms.size(); ++i) room_name_to_idx[in.rooms[i].id] = i;
-
     for (const auto &f : in.occupants) {
-        auto it = room_name_to_idx.find(f.room_id);
-        if (it == room_name_to_idx.end()) continue;
-        int ridx = it->second;
+        int ridx = f.room_idx;
+        if (ridx < 0 || ridx >= (int)in.rooms.size()) continue;
         int start = std::max(0, f.admission_day);
         int los = std::max(1, f.length_of_stay);
         for (int dd = 0; dd < los; ++dd) {
@@ -380,8 +354,8 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
         for (int d = 0; d < ctx.days; ++d) {
             const auto &plist = ctx.patients_in_room_day[r][d];
             if (plist.size() < 2) continue;
-            std::unordered_map<std::string, int> age_counts;
-            for (int pid : plist) age_counts[ageGroupKey(in.patients[pid])]++;
+            std::unordered_map<int, int> age_counts;
+            for (int pid : plist) age_counts[in.patients[pid].age_group]++;
             long long n = (long long)plist.size();
             long long total_pairs = (n * (n - 1)) / 2;
             long long same_pairs = 0;
@@ -451,16 +425,16 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
 
     // -- Surgeon Transfer --
     int raw_surg = 0;
-    std::unordered_map<std::string, std::vector<std::set<std::string>>> surgeon_ot_by_day;
+    std::unordered_map<int, std::vector<std::set<int>>> surgeon_ot_by_day;
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         if (!(pid < admitted.size() && admitted[pid])) continue;
         int d = admit_day[pid];
         int ot_idx = ot_assigned_idx[pid];
         if (d < 0 || d >= ctx.days || ot_idx < 0 || ot_idx >= (int)in.ots.size()) continue;
-        const std::string &sid = in.patients[pid].surgeon_id;
-        if (sid.empty()) continue;
-        if (!surgeon_ot_by_day.count(sid)) surgeon_ot_by_day[sid] = std::vector<std::set<std::string>>(ctx.days);
-        surgeon_ot_by_day[sid][d].insert(in.ots[ot_idx].id);
+        int surgeon_idx = in.patients[pid].surgeon_idx;
+        if (surgeon_idx < 0) continue;
+        if (!surgeon_ot_by_day.count(surgeon_idx)) surgeon_ot_by_day[surgeon_idx] = std::vector<std::set<int>>(ctx.days);
+        surgeon_ot_by_day[surgeon_idx][d].insert(ot_idx);
     }
     for (const auto &kv : surgeon_ot_by_day) {
         for (int d = 0; d < ctx.days; ++d) {

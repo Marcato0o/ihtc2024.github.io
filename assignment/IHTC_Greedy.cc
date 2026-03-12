@@ -160,13 +160,9 @@ int countFeasiblePlacements(const IHTC_Input& in, const IHTC_Output& out, int pa
 }
 
 void seedOccupants(const IHTC_Input& in, IHTC_Output& out) {
-    std::unordered_map<std::string, int> room_idx;
-    for (int r = 0; r < (int)in.rooms.size(); ++r) room_idx[in.rooms[r].id] = r;
-
     for (const auto& f : in.occupants) {
-        auto it = room_idx.find(f.room_id);
-        if (it == room_idx.end()) continue;
-        out.seedOccupantStay(it->second, f.admission_day, f.length_of_stay, f.sex);
+        if (f.room_idx < 0 || f.room_idx >= (int)in.rooms.size()) continue;
+        out.seedOccupantStay(f.room_idx, f.admission_day, f.length_of_stay, f.sex);
     }
 }
 
@@ -284,13 +280,9 @@ void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
     std::vector<std::vector<std::vector<int>>> room_shift_load(days, std::vector<std::vector<int>>(shifts, std::vector<int>(room_count, 0)));
     std::vector<std::vector<std::vector<int>>> room_shift_skill(days, std::vector<std::vector<int>>(shifts, std::vector<int>(room_count, 0)));
 
-    std::unordered_map<std::string, int> room_idx;
-    for (int r = 0; r < room_count; ++r) room_idx[in.rooms[r].id] = r;
-
     for (const auto& f : in.occupants) {
-        auto it = room_idx.find(f.room_id);
-        if (it == room_idx.end()) continue;
-        int ridx = it->second;
+        int ridx = f.room_idx;
+        if (ridx < 0 || ridx >= room_count) continue;
         int start = std::max(0, f.admission_day);
         int los = std::max(1, f.length_of_stay);
         for (int dd = 0; dd < los; ++dd) {

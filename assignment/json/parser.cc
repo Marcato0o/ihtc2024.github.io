@@ -55,6 +55,40 @@ bool try_get_bool(const json &j, const std::vector<std::string> &candidates, boo
     return def;
 }
 
+int parse_age_group(const json &j, const std::vector<std::string> &candidates,
+                    std::unordered_map<std::string, int> &age_group_idx_by_key,
+                    int &next_age_group_idx, int def=-1) {
+    for (const auto &k : candidates) {
+        if (!j.contains(k) || j[k].is_null()) continue;
+        const json &v = j[k];
+
+        std::string key;
+        if (v.is_number_integer()) {
+            key = std::to_string(v.get<int>());
+        } else if (v.is_number_float()) {
+            key = std::to_string(static_cast<int>(v.get<double>()));
+        } else if (v.is_string()) {
+            key = v.get<std::string>();
+        } else {
+            continue;
+        }
+
+        auto it = age_group_idx_by_key.find(key);
+        if (it != age_group_idx_by_key.end()) return it->second;
+
+        int idx = next_age_group_idx++;
+        age_group_idx_by_key[key] = idx;
+        return idx;
+    }
+    return def;
+}
+
+Gender parse_gender(const std::string &value) {
+    if (value == "A") return Gender::A;
+    if (value == "B") return Gender::B;
+    return Gender::NONE;
+}
+
 } // namespace
 
 namespace jsonio {
@@ -146,6 +180,10 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
         }
     }
 
+    std::unordered_map<std::string, int> room_idx_by_id;
+    room_idx_by_id.reserve(in.rooms.size());
+    for (int i = 0; i < (int)in.rooms.size(); ++i) room_idx_by_id[in.rooms[i].id] = i;
+
     if (j.contains("nurses") && j["nurses"].is_array()) {
         for (const auto &jn : j["nurses"]) {
             Nurse n;
@@ -185,19 +223,27 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
         }
     }
 
+    std::unordered_map<std::string, int> surgeon_idx_by_id;
+    surgeon_idx_by_id.reserve(in.surgeons.size());
+    for (int i = 0; i < (int)in.surgeons.size(); ++i) surgeon_idx_by_id[in.surgeons[i].id] = i;
+
+    std::unordered_map<std::string, int> age_group_idx_by_key;
+    int next_age_group_idx = 0;
+
     if (j.contains("patients") && j["patients"].is_array()) {
         for (const auto &jp : j["patients"]) {
             Patient p;
-            p.raw_json = jp;
             p.id = try_get_string(jp, {"id","patient_id","patientId","name"}, "");
             p.mandatory = try_get_bool(jp, {"mandatory","isMandatory"}, false);
             p.release_date = try_get_int(jp, {"releaseDate","release_date","release","earliest","surgery_release_day"}, 0);
             p.due_date = try_get_int(jp, {"dueDate","due_date","due","latest","surgery_due_day"}, in.D > 0 ? (in.D - 1) : 0);
             p.length_of_stay = try_get_int(jp, {"lengthOfStay","length_of_stay","los","stay"}, 1);
-            p.age_group = try_get_int(jp, {"age_group","ageGroup","age"}, -1);
-            p.sex = try_get_string(jp, {"sex","gender"}, "");
+            p.age_group = parse_age_group(jp, {"age_group","ageGroup","age"}, age_group_idx_by_key, next_age_group_idx, -1);
+            p.sex = parse_gender(try_get_string(jp, {"sex","gender"}, ""));
             p.surgery_time = try_get_int(jp, {"surgery_time","surgeryTime","surgery","operating_time","operatingTime","surgery_duration"}, 0);
-            p.surgeon_id = try_get_string(jp, {"surgeon","surgeon_id","surgeonId","assigned_surgeon"}, "");
+            std::string surgeon_id = try_get_string(jp, {"surgeon","surgeon_id","surgeonId","assigned_surgeon"}, "");
+            auto surgeon_it = surgeon_idx_by_id.find(surgeon_id);
+            p.surgeon_idx = (surgeon_it != surgeon_idx_by_id.end()) ? surgeon_it->second : -1;
             p.min_nurse_level = try_get_int(jp, {"min_nurse_level","minLevel","required_nurse_level"}, 0);
 
             if (jp.contains("nurse_load") && jp["nurse_load"].is_array()) {
@@ -211,11 +257,23 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
             }
 
             if (jp.contains("incompatible_rooms") && jp["incompatible_rooms"].is_array()) {
-                for (auto &x : jp["incompatible_rooms"]) if (x.is_string()) p.incompatible_rooms.push_back(x.get<std::string>());
+                for (auto &x : jp["incompatible_rooms"]) {
+                    if (!x.is_string()) continue;
+                    auto it = room_idx_by_id.find(x.get<std::string>());
+                    if (it != room_idx_by_id.end()) p.incompatible_room_idxs.push_back(it->second);
+                }
             } else if (jp.contains("incompatible") && jp["incompatible"].is_array()) {
-                for (auto &x : jp["incompatible"]) if (x.is_string()) p.incompatible_rooms.push_back(x.get<std::string>());
+                for (auto &x : jp["incompatible"]) {
+                    if (!x.is_string()) continue;
+                    auto it = room_idx_by_id.find(x.get<std::string>());
+                    if (it != room_idx_by_id.end()) p.incompatible_room_idxs.push_back(it->second);
+                }
             } else if (jp.contains("incompatible_room_ids") && jp["incompatible_room_ids"].is_array()) {
-                for (auto &x : jp["incompatible_room_ids"]) if (x.is_string()) p.incompatible_rooms.push_back(x.get<std::string>());
+                for (auto &x : jp["incompatible_room_ids"]) {
+                    if (!x.is_string()) continue;
+                    auto it = room_idx_by_id.find(x.get<std::string>());
+                    if (it != room_idx_by_id.end()) p.incompatible_room_idxs.push_back(it->second);
+                }
             }
 
             if (p.min_nurse_level == 0 && jp.contains("skill_level_required") && jp["skill_level_required"].is_array()) {
@@ -232,8 +290,10 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
         for (const auto &jo : j["occupants"]) {
             Occupant o;
             o.id = try_get_string(jo, {"id","occupant_id","name"}, "");
-            o.room_id = try_get_string(jo, {"room_id","roomId","room"}, "");
-            o.sex = try_get_string(jo, {"sex","gender"}, "");
+            std::string room_id = try_get_string(jo, {"room_id","roomId","room"}, "");
+            auto room_it = room_idx_by_id.find(room_id);
+            o.room_idx = (room_it != room_idx_by_id.end()) ? room_it->second : -1;
+            o.sex = parse_gender(try_get_string(jo, {"sex","gender"}, ""));
             o.admission_day = try_get_int(jo, {"admission_day","admissionDay","day"}, 0);
             o.length_of_stay = try_get_int(jo, {"lengthOfStay","length_of_stay","los","stay"}, 1);
 
