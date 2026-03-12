@@ -74,6 +74,10 @@ public:
     explicit IHTC_Input(const std::string &file_name);
     bool loadInstance(const std::string &path);
     const std::string &getRawJsonText() const;
+    
+    // Ritorna l'indice del chirurgo dato il suo ID, oppure -1 se non esiste
+    int getSurgeonIdx(const std::string& surgeon_id) const;
+
     std::vector<Patient> patients;
     std::vector<Room> rooms;
     std::vector<Nurse> nurses;
@@ -102,7 +106,7 @@ class IHTC_Output {
 public:
     explicit IHTC_Output(const IHTC_Input &in);
 
-    void init(size_t num_patients, size_t num_rooms, size_t num_ots, int days);
+    void init(const IHTC_Input &in);
     bool canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const;
     void assignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in);
     void seedOccupantStay(int room_idx, int admission_day, int length_of_stay, const std::string &sex);
@@ -114,7 +118,7 @@ public:
     int getOtAssignedIdx(int patient_id) const;
     std::vector<std::tuple<int, int, int, int>> getNurseAssignmentTuples() const;
     int getRoomOccupancy(int room_idx, int day) const;
-    int getOtMinutesUsed(int ot_idx, int day) const;
+    int getOtAvailability(int ot_idx, int day) const;
 
     int ComputeCostRoomMixedAge() const;
     int ComputeCostRoomNurseSkill() const;
@@ -137,8 +141,8 @@ private:
     std::vector<int> ot_assigned_idx;
     std::vector<NurseAssignment> nurse_assignments;
     std::vector<std::vector<int>> room_occupancy;
-    std::vector<std::vector<int>> ot_minutes_used;
-    std::vector<std::vector<int>> surgeon_minutes_used;
+    std::vector<std::vector<int>> ot_availability;
+    std::vector<std::vector<int>> surgeon_availability;
     std::vector<std::vector<std::string>> room_gender;
 };
 

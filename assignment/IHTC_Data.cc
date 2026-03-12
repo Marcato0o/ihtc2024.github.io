@@ -17,22 +17,44 @@ const std::string &IHTC_Input::getRawJsonText() const {
     return raw_json_text;
 }
 
-IHTC_Output::IHTC_Output(const IHTC_Input &in) {
-    bound_input = &in;
-    int days = in.D > 0 ? in.D : 1;
-    init(in.patients.size(), in.rooms.size(), in.ots.size(), days);
+int IHTC_Input::getSurgeonIdx(const std::string& surgeon_id) const {
+    for (size_t i = 0; i < surgeons.size(); ++i) {
+        if (surgeons[i].id == surgeon_id) {
+            return (int)i;
+        }
+    }
+    return -1;
 }
 
-void IHTC_Output::init(size_t num_patients, size_t num_rooms, size_t num_ots, int days) {
-    admitted.assign(num_patients, false);
-    admit_day.assign(num_patients, -1);
-    room_assigned_idx.assign(num_patients, -1);
-    ot_assigned_idx.assign(num_patients, -1);
+IHTC_Output::IHTC_Output(const IHTC_Input &in) {
+    bound_input = &in;
+    init(in);
+}
+
+void IHTC_Output::init(const IHTC_Input &in) {
+    int days = in.D > 0 ? in.D : 1;
+    admitted.assign(in.patients.size(), false);
+    admit_day.assign(in.patients.size(), -1);
+    room_assigned_idx.assign(in.patients.size(), -1);
+    ot_assigned_idx.assign(in.patients.size(), -1);
     nurse_assignments.clear();
-    room_occupancy.assign(num_rooms, std::vector<int>(days, 0));
-    ot_minutes_used.assign(num_ots, std::vector<int>(days, 0));
-    surgeon_minutes_used.assign(0, std::vector<int>());
-    room_gender.assign(num_rooms, std::vector<std::string>(days, ""));
+    room_occupancy.assign(in.rooms.size(), std::vector<int>(days, 0));
+    
+    // Inizializziamo ot_availability con le capacità massime fornite dall'input
+    ot_availability.resize(in.ots.size());
+    for (size_t i = 0; i < in.ots.size(); ++i) {
+        ot_availability[i] = in.ots[i].availability; // copiamo l'array dal JSON
+        ot_availability[i].resize(days, 0); // assicuriamo che la lunghezza copra tutti i giorni
+    }
+
+    // Inizializziamo surgeon_availability con le capacità massime fornite dall'input
+    surgeon_availability.resize(in.surgeons.size());
+    for (size_t i = 0; i < in.surgeons.size(); ++i) {
+        surgeon_availability[i] = in.surgeons[i].max_surgery_time; // copiato dal JSON
+        surgeon_availability[i].resize(days, 0); // assicuriamo che copra l'orizzonte
+    }
+
+    room_gender.assign(in.rooms.size(), std::vector<std::string>(days, ""));
 }
 
 bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const {
@@ -74,38 +96,20 @@ bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot
     }
 
     // 4. Vincoli della Sala Operatoria (Solo se gli serve operarsi, ot_idx >= 0)
-    if (ot_idx >= 0 && ot_idx < (int)ot_minutes_used.size()) {
-        int used = ot_minutes_used[ot_idx][day];
-        int cap = 0;
-        if (day < (int)in.ots[ot_idx].availability.size()) {
-            cap = in.ots[ot_idx].availability[day];
+    if (ot_idx >= 0 && ot_idx < (int)ot_availability.size()) {
+        // Controlliamo direttamente se la capacità residua per quel giorno basta
+        if (day >= (int)ot_availability[ot_idx].size() || ot_availability[ot_idx][day] < p.surgery_time) {
+            return false;
         }
-        
-        // Il nuovo intervento sfora i minuti disponibili di oggi?
-        if (used + p.surgery_time > cap) return false;
     }
 
     // 5. Vincoli del Chirurgo (Ha un limite di ore di lavoro al giorno)
     if (!p.surgeon_id.empty()) {
-        int surgeon_idx = -1;
-        for (int i = 0; i < (int)in.surgeons.size(); ++i) {
-            if (in.surgeons[i].id == p.surgeon_id) {
-                surgeon_idx = i;
-                break;
+        int surgeon_idx = in.getSurgeonIdx(p.surgeon_id);
+        if (surgeon_idx >= 0 && surgeon_idx < (int)surgeon_availability.size()) {
+            if (day >= (int)surgeon_availability[surgeon_idx].size() || surgeon_availability[surgeon_idx][day] < p.surgery_time) {
+                return false;
             }
-        }
-        if (surgeon_idx >= 0) {
-            int limit = 0;
-            if (day < (int)in.surgeons[surgeon_idx].max_surgery_time.size()) {
-                limit = in.surgeons[surgeon_idx].max_surgery_time[day];
-            }
-            int used = 0;
-            if (surgeon_idx < (int)surgeon_minutes_used.size() && day < (int)surgeon_minutes_used[surgeon_idx].size()) {
-                used = surgeon_minutes_used[surgeon_idx][day];
-            }
-            
-            // Il chirurgo andrebbe oltre le sue ore massime?
-            if (used + p.surgery_time > limit) return false;
         }
     }
 
@@ -114,42 +118,43 @@ bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot
 }
 
 void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) {
+    // 1. Dati base dell'assegnazione: Salviamo quando, dove e se è stato ammesso
     admitted[patient_id] = true;
     admit_day[patient_id] = day;
     room_assigned_idx[patient_id] = room_idx;
     ot_assigned_idx[patient_id] = ot_idx;
+    
     int los = std::max(1, in.patients[patient_id].length_of_stay);
-    int days = room_occupancy.empty() ? 0 : (int)room_occupancy[0].size();
+    int days = in.D; 
+    
+    // 2. Aggiornamento Stanza (Posti letto e Sesso)
+    // Per ogni giorno di permanenza del paziente, occupiamo un posto letto
     for (int dd = 0; dd < los; ++dd) {
         int dd_idx = day + dd;
         if (dd_idx >= 0 && dd_idx < days) {
             room_occupancy[room_idx][dd_idx] += 1;
+            // Se la stanza era vuota (senza genere), le assegniamo il sesso del paziente
             if (!in.patients[patient_id].sex.empty() && room_gender[room_idx][dd_idx].empty()) {
                 room_gender[room_idx][dd_idx] = in.patients[patient_id].sex;
             }
         }
     }
-    if (ot_idx >= 0 && ot_idx < (int)ot_minutes_used.size()) {
-        int days_ot = (int)ot_minutes_used[0].size();
-        if (day >= 0 && day < days_ot) {
-            ot_minutes_used[ot_idx][day] += in.patients[patient_id].surgery_time;
+    
+    // 3. Aggiornamento Sala Operatoria
+    // Se ha bisogno della sala operatoria, scaliamo i minuti dell'intervento dalla disponibilità residua
+    if (ot_idx >= 0 && ot_idx < (int)ot_availability.size()) {
+        if (day >= 0 && day < days) {
+            ot_availability[ot_idx][day] -= in.patients[patient_id].surgery_time;
         }
     }
 
+    // 4. Aggiornamento Chirurgo
+    // Se il paziente richiede un chirurgo specifico, scaliamo i minuti dalla sua disponibilità giornaliera
     if (!in.patients[patient_id].surgeon_id.empty()) {
-        int surgeon_idx = -1;
-        for (int i = 0; i < (int)in.surgeons.size(); ++i) {
-            if (in.surgeons[i].id == in.patients[patient_id].surgeon_id) {
-                surgeon_idx = i;
-                break;
-            }
-        }
-        if (surgeon_idx >= 0) {
-            if (surgeon_minutes_used.size() != in.surgeons.size()) {
-                surgeon_minutes_used.assign(in.surgeons.size(), std::vector<int>(days, 0));
-            }
+        int surgeon_idx = in.getSurgeonIdx(in.patients[patient_id].surgeon_id);
+        if (surgeon_idx >= 0 && surgeon_idx < (int)surgeon_availability.size()) {
             if (day >= 0 && day < days) {
-                surgeon_minutes_used[surgeon_idx][day] += in.patients[patient_id].surgery_time;
+                surgeon_availability[surgeon_idx][day] -= in.patients[patient_id].surgery_time;
             }
         }
     }
@@ -211,10 +216,10 @@ int IHTC_Output::getRoomOccupancy(int room_idx, int day) const {
     return room_occupancy[room_idx][day];
 }
 
-int IHTC_Output::getOtMinutesUsed(int ot_idx, int day) const {
-    if (ot_idx < 0 || ot_idx >= (int)ot_minutes_used.size()) return 0;
-    if (day < 0 || day >= (int)ot_minutes_used[0].size()) return 0;
-    return ot_minutes_used[ot_idx][day];
+int IHTC_Output::getOtAvailability(int ot_idx, int day) const {
+    if (ot_idx < 0 || ot_idx >= (int)ot_availability.size()) return 0;
+    if (day < 0 || day >= (int)ot_availability[0].size()) return 0;
+    return ot_availability[ot_idx][day];
 }
 
 namespace {

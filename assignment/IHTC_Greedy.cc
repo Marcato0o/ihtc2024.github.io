@@ -9,11 +9,6 @@
 
 namespace {
 
-// Restituisce il numero di giorni dell'orizzonte di pianificazione
-int horizonDays(const IHTC_Input& in) {
-    return in.D;
-}
-
 // Ordina i pazienti per priorità: prima i più urgenti, poi i più "pesanti"
 // uso sort con un comparatore personalizzato basato sulle proprietà dei pazienti, basta confrontarne 2.
 std::vector<int> sortPatientsByPriority(const IHTC_Input& in) {
@@ -57,8 +52,12 @@ double evaluatePlacementCost(const IHTC_Input& in, const IHTC_Output& out, int p
     cost += (day - p.release_date) * in.w_patient_delay;
 
     // Costo per apertura di una nuova sala operatoria in quel giorno
-    if (ot_id >= 0 && out.getOtMinutesUsed(ot_id, day) == 0) {
-        cost += in.w_open_operating_theater;
+    if (ot_id >= 0) {
+        int max_cap = (day < (int)in.ots[ot_id].availability.size()) ? in.ots[ot_id].availability[day] : 0;
+        // Se la capacità residua è uguale a quella di default, l'OT è intonsa e va aperta
+        if (out.getOtAvailability(ot_id, day) == max_cap) {
+            cost += in.w_open_operating_theater;
+        }
     }
 
     // Euristica: preferire stanze meno affollate (non è un peso ufficiale)
@@ -176,7 +175,7 @@ void seedOccupants(const IHTC_Input& in, IHTC_Output& out) {
 namespace GreedySolver {
 
 void solvePASandSCP(const IHTC_Input& in, IHTC_Output& out) {
-    out.init(in.patients.size(), in.rooms.size(), in.ots.size(), horizonDays(in));
+    out.init(in);
     seedOccupants(in, out);
 
     std::vector<int> order = sortPatientsByPriority(in);
