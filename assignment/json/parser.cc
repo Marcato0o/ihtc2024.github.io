@@ -89,7 +89,6 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
     in.surgeons.clear();
     in.occupants.clear();
     in.ots.clear();
-    in.weights.clear();
     in.D = 0;
 
     if (j.contains("D") && j["D"].is_number_integer()) in.D = j["D"].get<int>();
@@ -105,18 +104,18 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
     else if (j.contains("shift_types") && j["shift_types"].is_array()) in.shifts_per_day = (int)j["shift_types"].size();
 
     if (j.contains("ots") && j["ots"].is_array()) {
+        // Fallback backward-compatibility / fallback block not needed, but we'll try to adapt if exists
         for (const auto &jo : j["ots"]) {
             OT o;
             o.id = try_get_string(jo, {"id","ot_id","otId","name"}, "");
-            o.daily_capacity = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
-            if (in.D > 0) o.daily_capacity_by_day.assign(in.D, o.daily_capacity);
-            if (jo.contains("unavailable_days") && jo["unavailable_days"].is_array()) {
-                for (auto &d : jo["unavailable_days"]) {
-                    if (!d.is_number_integer()) continue;
-                    int day = d.get<int>();
-                    o.unavailable_days.push_back(day);
-                    if (day >= 0 && day < (int)o.daily_capacity_by_day.size()) o.daily_capacity_by_day[day] = 0;
+            if (jo.contains("availability") && jo["availability"].is_array()) {
+                o.availability.assign(jo["availability"].size(), 0);
+                for (size_t d = 0; d < jo["availability"].size(); ++d) {
+                    o.availability[d] = jo["availability"][d].is_number_integer() ? jo["availability"][d].get<int>() : 0;
                 }
+            } else {
+                int def_cap = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
+                if (in.D > 0) o.availability.assign(in.D, def_cap);
             }
             in.ots.push_back(std::move(o));
         }
@@ -125,19 +124,14 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
             OT o;
             o.id = try_get_string(jo, {"id","ot_id","otId","name"}, "");
             if (jo.contains("availability") && jo["availability"].is_array()) {
-                int max_cap = 0;
-                o.daily_capacity_by_day.assign(jo["availability"].size(), 0);
+                o.availability.assign(jo["availability"].size(), 0);
                 for (size_t d = 0; d < jo["availability"].size(); ++d) {
-                    int cap = jo["availability"][d].is_number_integer() ? jo["availability"][d].get<int>() : 0;
-                    o.daily_capacity_by_day[d] = cap;
-                    if (cap > max_cap) max_cap = cap;
-                    if (cap <= 0) o.unavailable_days.push_back((int)d);
+                    o.availability[d] = jo["availability"][d].is_number_integer() ? jo["availability"][d].get<int>() : 0;
                 }
-                if (in.D == 0) in.D = (int)o.daily_capacity_by_day.size();
-                o.daily_capacity = max_cap;
+                if (in.D == 0) in.D = (int)o.availability.size();
             } else {
-                o.daily_capacity = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
-                if (in.D > 0) o.daily_capacity_by_day.assign(in.D, o.daily_capacity);
+                int def_cap = try_get_int(jo, {"daily_capacity","capacity","cap","dailyCap"}, 0);
+                if (in.D > 0) o.availability.assign(in.D, def_cap);
             }
             in.ots.push_back(std::move(o));
         }
@@ -177,20 +171,16 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
         for (const auto &js : j["surgeons"]) {
             Surgeon s;
             s.id = try_get_string(js, {"id","surgeon_id","surgeonId","name"}, "");
-            s.max_daily_time = try_get_int(js, {"max_daily_time","max","daily_time"}, 0);
-            if (s.max_daily_time == 0 && js.contains("max_surgery_time") && js["max_surgery_time"].is_array()) {
-                int mx = 0;
-                s.daily_max_time.assign(js["max_surgery_time"].size(), 0);
+            if (js.contains("max_surgery_time") && js["max_surgery_time"].is_array()) {
+                s.max_surgery_time.assign(js["max_surgery_time"].size(), 0);
                 for (size_t d = 0; d < js["max_surgery_time"].size(); ++d) {
                     const auto &v = js["max_surgery_time"][d];
-                    if (!v.is_number_integer()) continue;
-                    int val = v.get<int>();
-                    s.daily_max_time[d] = val;
-                    mx = std::max(mx, val);
+                    if (v.is_number_integer()) s.max_surgery_time[d] = v.get<int>();
                 }
-                s.max_daily_time = mx;
+            } else {
+                int def_time = try_get_int(js, {"max_daily_time","max","daily_time"}, 0);
+                if (in.D > 0) s.max_surgery_time.assign(in.D, def_time);
             }
-            if (s.daily_max_time.empty() && in.D > 0) s.daily_max_time.assign(in.D, s.max_daily_time);
             in.surgeons.push_back(std::move(s));
         }
     }
@@ -260,10 +250,18 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
     }
 
     if (j.contains("weights") && j["weights"].is_object()) {
-        for (auto it = j["weights"].begin(); it != j["weights"].end(); ++it) {
-            if (it.value().is_number_integer()) in.weights[it.key()] = it.value().get<int>();
-            else if (it.value().is_number()) in.weights[it.key()] = static_cast<int>(it.value().get<double>());
-        }
+        auto& wj = j["weights"];
+        auto readW = [&](const char* key, int& dest) {
+            if (wj.contains(key) && wj[key].is_number()) dest = wj[key].get<int>();
+        };
+        readW("room_mixed_age",          in.w_room_mixed_age);
+        readW("open_operating_theater",  in.w_open_operating_theater);
+        readW("patient_delay",           in.w_patient_delay);
+        readW("unscheduled_optional",    in.w_unscheduled_optional);
+        readW("room_nurse_skill",        in.w_room_nurse_skill);
+        readW("continuity_of_care",      in.w_continuity_of_care);
+        readW("nurse_eccessive_workload",in.w_nurse_eccessive_workload);
+        readW("surgeon_transfer",        in.w_surgeon_transfer);
     }
 
     return true;

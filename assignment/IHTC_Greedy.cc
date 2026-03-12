@@ -9,29 +9,40 @@
 
 namespace {
 
+// Restituisce il numero di giorni dell'orizzonte di pianificazione
 int horizonDays(const IHTC_Input& in) {
-    return in.D > 0 ? in.D : 1;
+    return in.D;
 }
 
+// Ordina i pazienti per priorità: prima i più urgenti, poi i più "pesanti"
+// uso sort con un comparatore personalizzato basato sulle proprietà dei pazienti, basta confrontarne 2.
 std::vector<int> sortPatientsByPriority(const IHTC_Input& in) {
+    // Crea una lista di indici [0, 1, 2, ..., N-1], uno per paziente
     std::vector<int> p_ids(in.patients.size());
     for (int i = 0; i < (int)in.patients.size(); ++i) p_ids[i] = i;
 
+    // Ordina gli indici confrontando le proprietà dei pazienti
     std::sort(p_ids.begin(), p_ids.end(), [&](int a, int b) {
-        const Patient& pa = in.patients[a];
-        const Patient& pb = in.patients[b];
+        const Patient &pa = in.patients[a];
+        const Patient &pb = in.patients[b];
 
+        // I pazienti obbligatori vengono prima degli opzionali
         if (pa.mandatory != pb.mandatory) return pa.mandatory > pb.mandatory;
 
+        // Tra obbligatori: prima chi ha la scadenza più vicina
         if (pa.mandatory) {
             if (pa.due_date != pb.due_date) return pa.due_date < pb.due_date;
+            // A parità di scadenza, prima chi può entrare prima
             if (pa.release_date != pb.release_date) return pa.release_date < pb.release_date;
+            // A parità, prima chi ha la finestra di ammissione più stretta
             int window_a = pa.due_date - pa.release_date;
             int window_b = pb.due_date - pb.release_date;
             if (window_a != window_b) return window_a < window_b;
         }
 
+        // Tra pazienti con stessa urgenza: prima chi resta più a lungo
         if (pa.length_of_stay != pb.length_of_stay) return pa.length_of_stay > pb.length_of_stay;
+        // Infine, prima chi ha un intervento più lungo
         return pa.surgery_time > pb.surgery_time;
     });
 
@@ -42,60 +53,61 @@ double evaluatePlacementCost(const IHTC_Input& in, const IHTC_Output& out, int p
     double cost = 0.0;
     const Patient& p = in.patients[patient_id];
 
-    auto w = [&](const std::string& key, double fallback) -> double {
-        auto it = in.weights.find(key);
-        if (it != in.weights.end()) return static_cast<double>(it->second);
-        return fallback;
-    };
+    // Costo per ritardo di ammissione rispetto alla release date
+    cost += (day - p.release_date) * in.w_patient_delay;
 
-    double wS7 = w("S7", 5.0);
-    cost += (day - p.release_date) * wS7;
-
-    double wS5 = w("S5", 20.0);
+    // Costo per apertura di una nuova sala operatoria in quel giorno
     if (ot_id >= 0 && out.getOtMinutesUsed(ot_id, day) == 0) {
-        cost += wS5;
+        cost += in.w_open_operating_theater;
     }
 
-    double wS1 = w("S1", 1.0);
+    // Euristica: preferire stanze meno affollate (non è un peso ufficiale)
     int occ = out.getRoomOccupancy(room_id, day);
-    cost += occ * wS1;
+    cost += occ * 1.0;
 
-    double wSx = w("Sx", 0.1);
-    cost += p.surgery_time * wSx;
+    // Euristica: a parità penalizzare interventi lunghi per bilanciarli
+    cost += p.surgery_time * 0.1;
 
     return cost;
 }
 
+// Cerca la migliore combinazione (giorno, stanza, sala operatoria) per un paziente
 bool schedulePatient(const IHTC_Input& in, IHTC_Output& out, int patient_id) {
     const Patient& p = in.patients[patient_id];
 
+    // Migliore piazzamento trovato finora
     int best_day = -1;
     int best_room = -1;
     int best_ot = -1;
     double min_cost = std::numeric_limits<double>::max();
 
-    int start_d = std::max(0, p.release_date);
-    int end_d = (in.D > 0) ? (in.D - 1) : start_d;
+    // Finestra temporale ammissibile per l'ammissione
+    int start_d = p.release_date;
+    int end_d = in.D - 1;
     if (p.mandatory) end_d = std::min(end_d, p.due_date);
-    if (end_d < start_d) return false;
 
+    // Controlla se il paziente ha bisogno di un intervento chirurgico
     bool needs_ot = p.surgery_time > 0;
-    if (needs_ot && in.ots.empty()) return false;
+    if (needs_ot && in.ots.empty()) return false; // serve una OT ma non ce ne sono
 
+    // Prova tutte le combinazioni giorno × stanza × sala operatoria
     for (int d = start_d; d <= end_d; ++d) {
         for (int r = 0; r < (int)in.rooms.size(); ++r) {
+            // Se non serve OT, il ciclo gira una sola volta con ot = -1
             int ot_start = needs_ot ? 0 : -1;
             int ot_end = needs_ot ? (int)in.ots.size() - 1 : -1;
             for (int ot = ot_start; ot <= ot_end; ++ot) {
+                // Verifica vincoli hard (compatibilità, capienza, ecc.)
                 if (!out.canAssignPatient(patient_id, d, r, ot, in)) continue;
 
+                // Valuta il costo di questo piazzamento
                 double current_cost = evaluatePlacementCost(in, out, patient_id, d, r, ot);
                 if (current_cost < min_cost) {
                     min_cost = current_cost;
                     best_day = d;
                     best_room = r;
                     best_ot = ot;
-                    if (min_cost <= 0.0) break;
+                    if (min_cost <= 0.0) break; // costo zero = ottimo, esci subito
                 }
             }
             if (min_cost <= 0.0) break;
@@ -103,32 +115,44 @@ bool schedulePatient(const IHTC_Input& in, IHTC_Output& out, int patient_id) {
         if (min_cost <= 0.0) break;
     }
 
+    // Se trovato un piazzamento valido, assegna il paziente
     if (best_day != -1) {
         out.assignPatient(patient_id, best_day, best_room, best_ot, in);
         return true;
     }
-    return false;
+    return false; // nessun piazzamento feasible trovato
 }
 
+// Conta quante combinazioni (giorno, stanza, sala operatoria) sono valide per un paziente.
+// Si ferma in anticipo (early exit) se supera la soglia `stop_after` per risparmiare tempo.
 int countFeasiblePlacements(const IHTC_Input& in, const IHTC_Output& out, int patient_id, int stop_after) {
     const Patient& p = in.patients[patient_id];
 
+    // Finestra temporale
     int start_d = std::max(0, p.release_date);
-    int end_d = (in.D > 0) ? (in.D - 1) : start_d;
+    int end_d = in.D - 1;
     if (p.mandatory) end_d = std::min(end_d, p.due_date);
-    if (end_d < start_d) return 0;
+    if (end_d < start_d) return 0; // nessuna opzione possibile
 
+    // Controllo sala operatoria
     bool needs_ot = p.surgery_time > 0;
-    if (needs_ot && in.ots.empty()) return 0;
+    if (needs_ot && in.ots.empty()) return 0; // nessuna opzione se serve OT ma non ci sono
 
     int feasible = 0;
+    
+    // Prova tutte le combinazioni possibili
     for (int d = start_d; d <= end_d; ++d) {
         for (int r = 0; r < (int)in.rooms.size(); ++r) {
             int ot_start = needs_ot ? 0 : -1;
             int ot_end = needs_ot ? (int)in.ots.size() - 1 : -1;
             for (int ot = ot_start; ot <= ot_end; ++ot) {
+                // Se i vincoli non sono rispettati, scarta l'opzione
                 if (!out.canAssignPatient(patient_id, d, r, ot, in)) continue;
+                
+                // Opzione valida trovata!
                 feasible++;
+                
+                // Se abbiamo già trovato abbastanza opzioni, smetti di cercare
                 if (feasible > stop_after) return feasible;
             }
         }
@@ -176,10 +200,27 @@ void solvePASandSCP(const IHTC_Input& in, IHTC_Output& out) {
             int feasible = countFeasiblePlacements(in, out, pid, current_stop);
             int rank = base_rank[pid];
 
+            // Valuta se il paziente corrente (pid) è "migliore" (più urgente di posizionare) 
+            // rispetto al miglior paziente trovato finora in questo step (chosen_pid)
             bool better = false;
+            
+            // 1. Se non abbiamo ancora scelto nessuno, prendi il primo che capita
             if (chosen_pid == -1) better = true;
+            
+            // 2. Priorità assoluta: se i due pazienti hanno stato mandatory diverso, 
+            // vince quello mandatory (is_mandatory == true). 
+            // Se sono uguali (entrambi mandatory o entrambi optional), si passa al criterio successivo.
             else if (is_mandatory != chosen_mandatory) better = is_mandatory;
+            
+            // 3. Minimum Feasible Options (Tie-breaker n.1):
+            // Tra due pazienti con lo stesso stato mandatory, diamo la precedenza 
+            // a chi ha "meno opzioni" rimaste per l'inserimento. È più difficile da piazzare, 
+            // quindi va inserito prima che lo spazio finisca.
             else if (feasible != chosen_feasible) better = (feasible < chosen_feasible);
+            
+            // 4. Ordine base (Tie-breaker n.2):
+            // Se hanno lo stesso numero di opzioni rimaste (e lo stesso stato mandatory),
+            // usiamo l'ordine calcolato da `sortPatientsByPriority` all'inizio (rank minore = priorità maggiore).
             else if (rank < chosen_rank) better = true;
 
             if (better) {
@@ -206,7 +247,7 @@ void solvePASandSCP(const IHTC_Input& in, IHTC_Output& out) {
 }
 
 void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
-    int days = in.D > 0 ? in.D : 1;
+    int days = in.D;
     int shifts = std::max(1, in.shifts_per_day);
     int room_count = (int)in.rooms.size();
     int nurse_count = (int)in.nurses.size();

@@ -3,7 +3,6 @@
 
 #include <string>
 #include <vector>
-#include <map>
 #include <tuple>
 #include "nlohmann/json.hpp"
 
@@ -51,8 +50,7 @@ struct Nurse {
 };
 struct Surgeon {
     std::string id;
-    int max_daily_time = 0;
-    std::vector<int> daily_max_time;
+    std::vector<int> max_surgery_time;
 };
 
 struct Occupant {
@@ -67,9 +65,7 @@ struct Occupant {
 
 struct OT {
     std::string id;
-    int daily_capacity = 0; // minutes
-    std::vector<int> unavailable_days; // day indices
-    std::vector<int> daily_capacity_by_day;
+    std::vector<int> availability; // daily capacity array
 };
 
 class IHTC_Input {
@@ -86,7 +82,16 @@ public:
     std::vector<OT> ots;
     int D = 0; // days
     int shifts_per_day = 3;
-    std::map<std::string,int> weights;
+
+    // Pesi soft letti dal JSON (chiave → valore)
+    int w_room_mixed_age        = 5;
+    int w_open_operating_theater = 10;
+    int w_patient_delay          = 5;
+    int w_unscheduled_optional   = 100;
+    int w_room_nurse_skill       = 1;
+    int w_continuity_of_care     = 1;
+    int w_nurse_eccessive_workload = 1;
+    int w_surgeon_transfer       = 1;
 
 private:
     friend bool jsonio::load_instance(IHTC_Input &in, const std::string &path);

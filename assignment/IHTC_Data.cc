@@ -36,43 +36,56 @@ void IHTC_Output::init(size_t num_patients, size_t num_rooms, size_t num_ots, in
 }
 
 bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const {
+    // 0. Sicurezza: Evitiamo crash per indici fuori dal mondo
     if (room_idx < 0 || room_idx >= (int)room_occupancy.size()) return false;
     if (day < 0 || day >= (int)room_occupancy[0].size()) return false;
+    
     const Patient &p = in.patients[patient_id];
     const Room &r = in.rooms[room_idx];
 
+    // 1. Finestre Temporali
+    // Il paziente non può essere ammesso prima della sua "release date"
     if (day < p.release_date) return false;
+    // Se è "mandatory", scade e NON PUÒ essere ammesso dopo la sua "due date"
     if (p.mandatory && day > p.due_date) return false;
 
     int los = std::max(1, p.length_of_stay);
-    int days = (int)room_occupancy[0].size();
+    int days = in.D;
 
+    // 2. Vincoli della Stanza (Capienza e Sesso)
+    // Dobbiamo verificare che per TUTTI i giorni del ricovero ci stia.
     for (int dd = 0; dd < los; ++dd) {
         int d_idx = day + dd;
-        if (d_idx < 0 || d_idx >= days) break;
+        if (d_idx < 0 || d_idx >= days) break; // Sfiora l'orizzonte (OK, l'ospedale non esplode)
+        
+        // C'è almeno un letto libero per la notte in esame?
         if (room_occupancy[room_idx][d_idx] >= r.capacity) return false;
+        
+        // Politica del sesso: in una stanza non ci possono stare sessi diversi
         if (!p.sex.empty()) {
             const std::string &g = room_gender[room_idx][d_idx];
             if (!g.empty() && g != p.sex) return false;
         }
     }
 
+    // 3. Stanze vietate per questo paziente (es. un bambino non può stare in geriatria)
     for (const auto &bad : p.incompatible_rooms) {
         if (bad == r.id) return false;
     }
 
+    // 4. Vincoli della Sala Operatoria (Solo se gli serve operarsi, ot_idx >= 0)
     if (ot_idx >= 0 && ot_idx < (int)ot_minutes_used.size()) {
         int used = ot_minutes_used[ot_idx][day];
-        int cap = in.ots[ot_idx].daily_capacity;
-        if (!in.ots[ot_idx].daily_capacity_by_day.empty() && day < (int)in.ots[ot_idx].daily_capacity_by_day.size()) {
-            cap = in.ots[ot_idx].daily_capacity_by_day[day];
+        int cap = 0;
+        if (day < (int)in.ots[ot_idx].availability.size()) {
+            cap = in.ots[ot_idx].availability[day];
         }
-        for (int bad_day : in.ots[ot_idx].unavailable_days) {
-            if (bad_day == day) cap = 0;
-        }
+        
+        // Il nuovo intervento sfora i minuti disponibili di oggi?
         if (used + p.surgery_time > cap) return false;
     }
 
+    // 5. Vincoli del Chirurgo (Ha un limite di ore di lavoro al giorno)
     if (!p.surgeon_id.empty()) {
         int surgeon_idx = -1;
         for (int i = 0; i < (int)in.surgeons.size(); ++i) {
@@ -82,18 +95,21 @@ bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot
             }
         }
         if (surgeon_idx >= 0) {
-            int limit = in.surgeons[surgeon_idx].max_daily_time;
-            if (!in.surgeons[surgeon_idx].daily_max_time.empty() && day < (int)in.surgeons[surgeon_idx].daily_max_time.size()) {
-                limit = in.surgeons[surgeon_idx].daily_max_time[day];
+            int limit = 0;
+            if (day < (int)in.surgeons[surgeon_idx].max_surgery_time.size()) {
+                limit = in.surgeons[surgeon_idx].max_surgery_time[day];
             }
             int used = 0;
             if (surgeon_idx < (int)surgeon_minutes_used.size() && day < (int)surgeon_minutes_used[surgeon_idx].size()) {
                 used = surgeon_minutes_used[surgeon_idx][day];
             }
+            
+            // Il chirurgo andrebbe oltre le sue ore massime?
             if (used + p.surgery_time > limit) return false;
         }
     }
 
+    // Se sopravvive a tutti i controlli, l'assegnazione è VALIDA
     return true;
 }
 
@@ -210,14 +226,6 @@ static std::string ageGroupKey(const Patient &p) {
     }
     if (p.age_group >= 0) return std::to_string(p.age_group);
     return "unknown";
-}
-
-static int getWeight(const IHTC_Input &in, const std::string &named_key, const std::string &short_key, int fallback) {
-    auto it_named = in.weights.find(named_key);
-    if (it_named != in.weights.end()) return it_named->second;
-    auto it_short = in.weights.find(short_key);
-    if (it_short != in.weights.end()) return it_short->second;
-    return fallback;
 }
 
 struct SoftCostContext {
@@ -371,7 +379,7 @@ int IHTC_Output::ComputeCostRoomMixedAge() const {
             raw_cost += (int)std::max(0LL, total_pairs - same_pairs);
         }
     }
-    return raw_cost * getWeight(in, "room_mixed_age", "S1", 5);
+    return raw_cost * in.w_room_mixed_age;
 }
 
 int IHTC_Output::ComputeCostRoomNurseSkill() const {
@@ -392,7 +400,7 @@ int IHTC_Output::ComputeCostRoomNurseSkill() const {
             }
         }
     }
-    return raw_cost * getWeight(in, "room_nurse_skill", "S2", 1);
+    return raw_cost * in.w_room_nurse_skill;
 }
 
 int IHTC_Output::ComputeCostContinuityOfCare() const {
@@ -416,7 +424,7 @@ int IHTC_Output::ComputeCostContinuityOfCare() const {
         }
         if (!seen_nurses.empty()) raw_cost += std::max(0, (int)seen_nurses.size() - 1);
     }
-    return raw_cost * getWeight(in, "continuity_of_care", "S3", 1);
+    return raw_cost * in.w_continuity_of_care;
 }
 
 int IHTC_Output::ComputeCostNurseExcessiveWorkload() const {
@@ -431,7 +439,7 @@ int IHTC_Output::ComputeCostNurseExcessiveWorkload() const {
             if (over > 0) raw_cost += over;
         }
     }
-    return raw_cost * getWeight(in, "nurse_eccessive_workload", "S4", 1);
+    return raw_cost * in.w_nurse_eccessive_workload;
 }
 
 int IHTC_Output::ComputeCostOpenOperatingTheater() const {
@@ -442,7 +450,7 @@ int IHTC_Output::ComputeCostOpenOperatingTheater() const {
     for (int d = 0; d < ctx.days; ++d) {
         if (!ctx.ot_by_day[d].empty()) raw_cost += (int)ctx.ot_by_day[d].size();
     }
-    return raw_cost * getWeight(in, "open_operating_theater", "S5", 10);
+    return raw_cost * in.w_open_operating_theater;
 }
 
 int IHTC_Output::ComputeCostSurgeonTransfer() const {
@@ -467,21 +475,21 @@ int IHTC_Output::ComputeCostSurgeonTransfer() const {
             if (sz > 1) raw_cost += (sz - 1);
         }
     }
-    return raw_cost * getWeight(in, "surgeon_transfer", "S6", 1);
+    return raw_cost * in.w_surgeon_transfer;
 }
 
 int IHTC_Output::ComputeCostPatientDelay() const {
     if (!bound_input) return 0;
     const IHTC_Input &in = *bound_input;
     SoftCostContext ctx = buildSoftCostContext(in, *this);
-    return ctx.total_delay * getWeight(in, "patient_delay", "S7", 5);
+    return ctx.total_delay * in.w_patient_delay;
 }
 
 int IHTC_Output::ComputeCostUnscheduledOptional() const {
     if (!bound_input) return 0;
     const IHTC_Input &in = *bound_input;
     SoftCostContext ctx = buildSoftCostContext(in, *this);
-    return ctx.unscheduled_optional_count * getWeight(in, "unscheduled_optional", "S8", 100);
+    return ctx.unscheduled_optional_count * in.w_unscheduled_optional;
 }
 
 int IHTC_Output::ComputeCostTotal() const {

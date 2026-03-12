@@ -131,7 +131,7 @@ Main modules in `assignment/`:
    - then longer stay / larger surgery time
 3. At each iteration, among unscheduled patients:
    - compute the number of **currently feasible** placements `(day, room, OT)`
-   - choose the patient with **minimum feasible options** (most constrained first), preserving mandatory priority and base rank as tie-breakers
+   - choose the patient with **minimum feasible options** (most constrained first), preserving mandatory priority and base rank as tie-breaker.
 4. For the selected patient, evaluate feasible placements with a greedy cost score:
    - delay penalty contribution
    - opening new OT penalty proxy
