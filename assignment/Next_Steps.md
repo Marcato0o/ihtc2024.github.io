@@ -1,193 +1,153 @@
-# TASK: Ottimizzazione del calcolo dei Soft Costs (Refactoring IHTC_Output)
+# TASK: Ottimizzazione Cache e Flattening delle Matrici in solveNRA
 
-**Ruolo:** Agisci come un Senior C++ Software Engineer. Il tuo obiettivo è eseguire un refactoring mirato sui file del progetto IHTP per risolvere un grave problema di performance (collo di bottiglia e memory allocation ridondante) legato alla funzione `buildSoftCostContext`.
+**Ruolo:** Agisci come un Senior C++ Software Engineer esperto di High Performance Computing (HPC).
 
 **Contesto del problema:**
-Attualmente, le funzioni `ComputeCost...()` in `IHTC_Data.cc` chiamano ciascuna `buildSoftCostContext()`. Quando si calcola il costo totale o si esporta il JSON, il contesto (una struttura dati pesante con matrici 3D) viene allocato, calcolato e distrutto fino a 16 volte consecutive.
+La funzione `solveNRA` nel file `IHTC_Greedy.cc` fa largo uso di `std::vector` annidati (2D e 3D) per mappare lo stato dell'ospedale (es. `nurse_available`, `room_shift_load`, ecc.). Questo causa grave frammentazione dell'heap (Pointer Chasing) e distrugge la CPU Cache Locality durante i cicli annidati ad alta frequenza.
 
 **Obiettivo:**
-Eliminare le 9 funzioni pubbliche individuali di calcolo dei costi e sostituirle con un'unica funzione `computeAllCosts()` che genera il `SoftCostContext` **una sola volta**, calcola tutti i pesi e restituisce una struct `CostBreakdown`.
+Sostituire tutte le matrici multi-dimensionali all'interno di `solveNRA` con singoli `std::vector` 1D contigui (Flat Arrays) e usare funzioni lambda inline per il calcolo degli indici, allineando il layout di memoria al pattern di accesso dei cicli (row-major order).
 
-Esegui i seguenti step in ordine:
-
-### STEP 1: Modifica `IHTC_Data.hh`
-1. Apri `IHTC_Data.hh`.
-2. Trova la classe `IHTC_Output`.
-3. **ELIMINA** le dichiarazioni di queste 9 funzioni:
-   - `ComputeCostRoomMixedAge()`
-   - `ComputeCostRoomNurseSkill()`
-   - `ComputeCostContinuityOfCare()`
-   - `ComputeCostNurseExcessiveWorkload()`
-   - `ComputeCostOpenOperatingTheater()`
-   - `ComputeCostSurgeonTransfer()`
-   - `ComputeCostPatientDelay()`
-   - `ComputeCostUnscheduledOptional()`
-   - `ComputeCostTotal()`
-4. **AGGIUNGI** al loro posto questa struct e il nuovo metodo pubblico:
+### STEP 1: Sostituzione integrale della funzione in `IHTC_Greedy.cc`
+1. Apri il file `IHTC_Greedy.cc`.
+2. Trova la definizione della funzione `void solveNRA(const IHTC_Input& in, IHTC_Output& out)`.
+3. Sostituisci l'INTERA funzione con il codice seguente, che implementa i flat array e le lambda di indicizzazione:
 
 ```cpp
-    struct CostBreakdown {
-        int age_mix = 0;
-        int skill = 0;
-        int continuity = 0;
-        int excess = 0;
-        int open_ot = 0;
-        int surgeon_transfer = 0;
-        int delay = 0;
-        int unscheduled = 0;
-        int total = 0;
-    };
-    CostBreakdown computeAllCosts() const;
-```
+void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
+    int days = in.D;
+    int shifts = std::max(1, in.shifts_per_day);
+    int room_count = (int)in.rooms.size();
+    int nurse_count = (int)in.nurses.size();
 
-### STEP 2: Modifica `IHTC_Data.cc`
-1. Apri `IHTC_Data.cc`.
-2. **ELIMINA** le implementazioni delle 9 funzioni rimosse allo Step 1.
-3. **AGGIUNGI** l'implementazione del nuovo mega-calcolatore in fondo al file:
+    out.clearNurseAssignments();
+    if (room_count == 0 || nurse_count == 0 || days <= 0) return;
 
-```cpp
-IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
-    CostBreakdown cb;
-    if (!bound_input) return cb;
+    // --- FUNZIONI LAMBDA PER INDICIZZAZIONE FLAT ARRAY ---
+    // Ordine ottimizzato per i cicli: Giorni -> Turni -> Infermieri/Stanze
+    auto idxDSN = [&](int d, int s, int n) { return d * (shifts * nurse_count) + s * nurse_count + n; };
+    auto idxDSR = [&](int d, int s, int r) { return d * (shifts * room_count) + s * room_count + r; };
+    auto idxDR  = [&](int d, int r) { return d * room_count + r; };
 
-    const IHTC_Input &in = *bound_input;
-    
-    // 1. ALLOCAZIONE UNICA DEL CONTESTO
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
+    int sz_DSN = days * shifts * nurse_count;
+    int sz_DSR = days * shifts * room_count;
+    int sz_DR  = days * room_count;
 
-    // 2. CALCOLO DEI COSTI
-    
-    // -- Room Mixed Age --
-    int raw_age = 0;
-    for (int r = 0; r < (int)in.rooms.size(); ++r) {
-        for (int d = 0; d < ctx.days; ++d) {
-            const auto &plist = ctx.patients_in_room_day[r][d];
-            if (plist.size() < 2) continue;
-            std::unordered_map<std::string, int> age_counts;
-            for (int pid : plist) age_counts[ageGroupKey(in.patients[pid])]++;
-            long long n = (long long)plist.size();
-            long long total_pairs = (n * (n - 1)) / 2;
-            long long same_pairs = 0;
-            for (const auto &kv : age_counts) {
-                long long c = kv.second;
-                same_pairs += (c * (c - 1)) / 2;
+    // --- ALLOCAZIONI FLAT (1D) CONTIGUE ---
+    std::vector<bool> nurse_available(sz_DSN, false);
+    std::vector<int> nurse_shift_cap(sz_DSN, 0);
+    std::vector<bool> room_occupied(sz_DR, false);
+    std::vector<int> room_shift_load(sz_DSR, 0);
+    std::vector<int> room_shift_skill(sz_DSR, 0);
+    std::vector<int> nurse_load(sz_DSN, 0);
+
+    // 1. Popolamento disponibilità infermieri
+    for (int n = 0; n < nurse_count; ++n) {
+        if (in.nurses[n].working_shifts.empty()) {
+            for (int d = 0; d < days; ++d) {
+                for (int s = 0; s < shifts; ++s) nurse_available[idxDSN(d, s, n)] = true;
             }
-            raw_age += (int)std::max(0LL, total_pairs - same_pairs);
-        }
-    }
-    cb.age_mix = raw_age * in.w_room_mixed_age;
-
-    // -- Room Nurse Skill --
-    int raw_skill = 0;
-    for (int d = 0; d < ctx.days; ++d) {
-        for (int sh = 0; sh < ctx.shifts; ++sh) {
-            for (int r = 0; r < (int)in.rooms.size(); ++r) {
-                int req = ctx.room_shift_skill[d][sh][r];
-                if (req <= 0) continue;
-                for (int nidx : ctx.room_shift_nurses[d][sh][r]) {
-                    if (nidx >= 0 && nidx < (int)ctx.nurse_level.size() && ctx.nurse_level[nidx] < req) {
-                        raw_skill += (req - ctx.nurse_level[nidx]);
-                    }
+        } else {
+            for (const auto& ws : in.nurses[n].working_shifts) {
+                int d = ws.day, s = ws.shift;
+                if (d >= 0 && d < days && s >= 0 && s < shifts) {
+                    nurse_available[idxDSN(d, s, n)] = true;
+                    nurse_shift_cap[idxDSN(d, s, n)] = ws.max_load;
                 }
             }
         }
     }
-    cb.skill = raw_skill * in.w_room_nurse_skill;
 
-    // -- Continuity of Care --
-    int raw_cont = 0;
-    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        if (!(pid < admitted.size() && admitted[pid])) continue;
-        int day0 = admit_day[pid];
-        int ridx = room_assigned_idx[pid];
-        if (ridx < 0 || ridx >= (int)in.rooms.size()) continue;
-        int los = std::max(1, in.patients[pid].length_of_stay);
-        std::set<int> seen_nurses;
+    std::unordered_map<std::string, int> room_idx;
+    for (int r = 0; r < room_count; ++r) room_idx[in.rooms[r].id] = r;
+
+    // 2. Popolamento da occupanti
+    for (const auto& f : in.occupants) {
+        auto it = room_idx.find(f.room_id);
+        if (it == room_idx.end()) continue;
+        int ridx = it->second;
+        int start = std::max(0, f.admission_day);
+        int los = std::max(1, f.length_of_stay);
         for (int dd = 0; dd < los; ++dd) {
-            int d = day0 + dd;
-            if (d < 0 || d >= ctx.days) continue;
-            for (int sh = 0; sh < ctx.shifts; ++sh) {
-                for (int nidx : ctx.room_shift_nurses[d][sh][ridx]) seen_nurses.insert(nidx);
+            int d = start + dd;
+            if (d < 0 || d >= days) continue;
+            room_occupied[idxDR(d, ridx)] = true;
+            for (int s = 0; s < shifts; ++s) {
+                int idx = dd * shifts + s;
+                int load = 1;
+                if (!f.nurse_load_per_shift.empty()) {
+                    if (idx < (int)f.nurse_load_per_shift.size()) load = f.nurse_load_per_shift[idx];
+                    else load = f.nurse_load_per_shift.back();
+                }
+                room_shift_load[idxDSR(d, s, ridx)] += load;
+                room_shift_skill[idxDSR(d, s, ridx)] = std::max(room_shift_skill[idxDSR(d, s, ridx)], f.min_nurse_level);
             }
         }
-        if (!seen_nurses.empty()) raw_cont += std::max(0, (int)seen_nurses.size() - 1);
     }
-    cb.continuity = raw_cont * in.w_continuity_of_care;
 
-    // -- Excessive Workload --
-    int raw_excess = 0;
-    for (int nidx = 0; nidx < (int)ctx.nurse_level.size(); ++nidx) {
-        for (int t = 0; t < ctx.days * ctx.shifts; ++t) {
-            int cap = (nidx < (int)ctx.nurse_max_load_by_shift.size()) ? ctx.nurse_max_load_by_shift[nidx][t] : 9999;
-            int over = ctx.nurse_load_by_shift[nidx][t] - cap;
-            if (over > 0) raw_excess += over;
+    // 3. Popolamento da pazienti ammessi
+    for (int pid = 0; pid < (int)in.patients.size(); ++pid) {
+        if (!out.isAdmitted(pid)) continue;
+        int ridx = out.getRoomAssignedIdx(pid);
+        if (ridx < 0 || ridx >= room_count) continue;
+        int ad = out.getAdmitDay(pid);
+        int los = std::max(1, in.patients[pid].length_of_stay);
+        for (int dd = 0; dd < los; ++dd) {
+            int d = ad + dd;
+            if (d < 0 || d >= days) continue;
+            room_occupied[idxDR(d, ridx)] = true;
+            for (int s = 0; s < shifts; ++s) {
+                int idx = dd * shifts + s;
+                int load = 1;
+                if (!in.patients[pid].nurse_load_per_shift.empty()) {
+                    if (idx < (int)in.patients[pid].nurse_load_per_shift.size()) load = in.patients[pid].nurse_load_per_shift[idx];
+                    else load = in.patients[pid].nurse_load_per_shift.back();
+                }
+                room_shift_load[idxDSR(d, s, ridx)] += load;
+                room_shift_skill[idxDSR(d, s, ridx)] = std::max(room_shift_skill[idxDSR(d, s, ridx)], in.patients[pid].min_nurse_level);
+            }
         }
     }
-    cb.excess = raw_excess * in.w_nurse_eccessive_workload;
 
-    // -- Open Operating Theater --
-    int raw_ot = 0;
-    for (int d = 0; d < ctx.days; ++d) {
-        if (!ctx.ot_by_day[d].empty()) raw_ot += (int)ctx.ot_by_day[d].size();
-    }
-    cb.open_ot = raw_ot * in.w_open_operating_theater;
+    // 4. Assegnazione greedy degli infermieri
+    for (int d = 0; d < days; ++d) {
+        for (int s = 0; s < shifts; ++s) {
+            for (int r = 0; r < room_count; ++r) {
+                if (!room_occupied[idxDR(d, r)]) continue;
 
-    // -- Surgeon Transfer --
-    int raw_surg = 0;
-    std::unordered_map<std::string, std::vector<std::set<std::string>>> surgeon_ot_by_day;
-    for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        if (!(pid < admitted.size() && admitted[pid])) continue;
-        int d = admit_day[pid];
-        int ot_idx = ot_assigned_idx[pid];
-        if (d < 0 || d >= ctx.days || ot_idx < 0 || ot_idx >= (int)in.ots.size()) continue;
-        const std::string &sid = in.patients[pid].surgeon_id;
-        if (sid.empty()) continue;
-        if (!surgeon_ot_by_day.count(sid)) surgeon_ot_by_day[sid] = std::vector<std::set<std::string>>(ctx.days);
-        surgeon_ot_by_day[sid][d].insert(in.ots[ot_idx].id);
-    }
-    for (const auto &kv : surgeon_ot_by_day) {
-        for (int d = 0; d < ctx.days; ++d) {
-            int sz = (int)kv.second[d].size();
-            if (sz > 1) raw_surg += (sz - 1);
+                int demand = room_shift_load[idxDSR(d, s, r)];
+                int req_skill = room_shift_skill[idxDSR(d, s, r)];
+
+                int best_nurse = -1;
+                long long best_score = std::numeric_limits<long long>::max();
+
+                for (int n = 0; n < nurse_count; ++n) {
+                    if (!nurse_available[idxDSN(d, s, n)]) continue;
+
+                    int cur = nurse_load[idxDSN(d, s, n)];
+                    int projected = cur + demand;
+                    int cap = nurse_shift_cap[idxDSN(d, s, n)] > 0 ? nurse_shift_cap[idxDSN(d, s, n)] : 9999;
+                    int overload = std::max(0, projected - cap);
+                    int skill_gap = std::max(0, req_skill - in.nurses[n].level);
+
+                    long long score = 0;
+                    score += 1000000LL * skill_gap;
+                    score += 10000LL * overload;
+                    score += 10LL * projected;
+                    score += n;
+
+                    if (score < best_score) {
+                        best_score = score;
+                        best_nurse = n;
+                    }
+                }
+
+                if (best_nurse >= 0) {
+                    nurse_load[idxDSN(d, s, best_nurse)] += demand;
+                    out.addNurseAssignment(best_nurse, d, s, r);
+                }
+            }
         }
     }
-    cb.surgeon_transfer = raw_surg * in.w_surgeon_transfer;
-
-    // -- Patient Delay --
-    cb.delay = ctx.total_delay * in.w_patient_delay;
-
-    // -- Unscheduled Optional --
-    cb.unscheduled = ctx.unscheduled_optional_count * in.w_unscheduled_optional;
-
-    // 3. CALCOLO TOTALE
-    cb.total = cb.age_mix + cb.skill + cb.continuity + cb.excess + 
-               cb.open_ot + cb.surgeon_transfer + cb.delay + cb.unscheduled;
-
-    return cb;
 }
 ```
-
-4. **MODIFICA** `IHTC_Output::printCosts()` sempre in `IHTC_Data.cc` affinché usi la struct:
-
-```cpp
-void IHTC_Output::printCosts() const {
-    CostBreakdown cb = computeAllCosts();
-
-    std::cout << "Cost: " << cb.total
-              << ", Unscheduled: " << cb.unscheduled
-              << ",  Delay: " << cb.delay
-              << ",  OpenOT: " << cb.open_ot
-              << ",  AgeMix: " << cb.age_mix
-              << ",  Skill: " << cb.skill
-              << ",  Excess: " << cb.excess
-              << ",  Continuity: " << cb.continuity
-              << ",  SurgeonTransfer: " << cb.surgeon_transfer
-              << std::endl;
-}
-```
-
-### STEP 3: Modifica il JSON Writer
-1. Trova il file responsabile della scrittura JSON (es. `json/writer.cc` o la funzione che implementa l'esportazione).
-2. All'inizio del blocco in cui si salvano i costi nel JSON, inserisci:
-   `IHTC_Output::CostBreakdown cb = out.computeAllCosts();`
-3. Sostituisci tutte le vecchie chiamate (es. `out.ComputeCostTotal()`) con le variabili della struct (es. `cb.total`, `cb.delay`, ecc.).
