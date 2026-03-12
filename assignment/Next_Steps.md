@@ -1,153 +1,111 @@
-# TASK: Ottimizzazione Cache e Flattening delle Matrici in solveNRA
+# TASK: Ottimizzazione Hot Paths tramite Interning (Rimozione Stringhe)
 
-**Ruolo:** Agisci come un Senior C++ Software Engineer esperto di High Performance Computing (HPC).
+**Ruolo:** Agisci come un Senior C++ Software Engineer esperto di ottimizzazione delle performance.
 
 **Contesto del problema:**
-La funzione `solveNRA` nel file `IHTC_Greedy.cc` fa largo uso di `std::vector` annidati (2D e 3D) per mappare lo stato dell'ospedale (es. `nurse_available`, `room_shift_load`, ecc.). Questo causa grave frammentazione dell'heap (Pointer Chasing) e distrugge la CPU Cache Locality durante i cicli annidati ad alta frequenza.
+Nei file `IHTC_Data.hh` e `IHTC_Data.cc`, alcune proprietà fondamentali (`gender`, `incompatible_rooms`, `surgeon_id`, `age_group`) sono modellate come `std::string`. Durante la fase di assegnazione (`canAssignPatient`, `assignPatient`) e calcolo dei costi, il codice esegue milioni di confronti tra stringhe e ricerche testuali. Questo distrugge le performance della CPU (confronto O(K) invece di O(1)). L'ID del paziente (`p01`, etc.) è già correttamente indicizzato, ma gli altri campi no.
 
 **Obiettivo:**
-Sostituire tutte le matrici multi-dimensionali all'interno di `solveNRA` con singoli `std::vector` 1D contigui (Flat Arrays) e usare funzioni lambda inline per il calcolo degli indici, allineando il layout di memoria al pattern di accesso dei cicli (row-major order).
+Sostituire le stringhe con identificatori numerici interi (`int`) o enumeratori (`enum class`) all'interno delle strutture dati e nei percorsi critici di calcolo. La traduzione da stringa a numero avverrà una sola volta durante il parsing del JSON.
 
-### STEP 1: Sostituzione integrale della funzione in `IHTC_Greedy.cc`
-1. Apri il file `IHTC_Greedy.cc`.
-2. Trova la definizione della funzione `void solveNRA(const IHTC_Input& in, IHTC_Output& out)`.
-3. Sostituisci l'INTERA funzione con il codice seguente, che implementa i flat array e le lambda di indicizzazione:
+Esegui i seguenti step in ordine:
 
+### STEP 1: Modifica `IHTC_Data.hh`
+1. Apri `IHTC_Data.hh`.
+2. Aggiungi questo `enum` in cima al file (dopo gli `#include` e prima delle struct):
 ```cpp
-void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
-    int days = in.D;
-    int shifts = std::max(1, in.shifts_per_day);
-    int room_count = (int)in.rooms.size();
-    int nurse_count = (int)in.nurses.size();
-
-    out.clearNurseAssignments();
-    if (room_count == 0 || nurse_count == 0 || days <= 0) return;
-
-    // --- FUNZIONI LAMBDA PER INDICIZZAZIONE FLAT ARRAY ---
-    // Ordine ottimizzato per i cicli: Giorni -> Turni -> Infermieri/Stanze
-    auto idxDSN = [&](int d, int s, int n) { return d * (shifts * nurse_count) + s * nurse_count + n; };
-    auto idxDSR = [&](int d, int s, int r) { return d * (shifts * room_count) + s * room_count + r; };
-    auto idxDR  = [&](int d, int r) { return d * room_count + r; };
-
-    int sz_DSN = days * shifts * nurse_count;
-    int sz_DSR = days * shifts * room_count;
-    int sz_DR  = days * room_count;
-
-    // --- ALLOCAZIONI FLAT (1D) CONTIGUE ---
-    std::vector<bool> nurse_available(sz_DSN, false);
-    std::vector<int> nurse_shift_cap(sz_DSN, 0);
-    std::vector<bool> room_occupied(sz_DR, false);
-    std::vector<int> room_shift_load(sz_DSR, 0);
-    std::vector<int> room_shift_skill(sz_DSR, 0);
-    std::vector<int> nurse_load(sz_DSN, 0);
-
-    // 1. Popolamento disponibilità infermieri
-    for (int n = 0; n < nurse_count; ++n) {
-        if (in.nurses[n].working_shifts.empty()) {
-            for (int d = 0; d < days; ++d) {
-                for (int s = 0; s < shifts; ++s) nurse_available[idxDSN(d, s, n)] = true;
-            }
-        } else {
-            for (const auto& ws : in.nurses[n].working_shifts) {
-                int d = ws.day, s = ws.shift;
-                if (d >= 0 && d < days && s >= 0 && s < shifts) {
-                    nurse_available[idxDSN(d, s, n)] = true;
-                    nurse_shift_cap[idxDSN(d, s, n)] = ws.max_load;
-                }
-            }
-        }
-    }
-
-    std::unordered_map<std::string, int> room_idx;
-    for (int r = 0; r < room_count; ++r) room_idx[in.rooms[r].id] = r;
-
-    // 2. Popolamento da occupanti
-    for (const auto& f : in.occupants) {
-        auto it = room_idx.find(f.room_id);
-        if (it == room_idx.end()) continue;
-        int ridx = it->second;
-        int start = std::max(0, f.admission_day);
-        int los = std::max(1, f.length_of_stay);
-        for (int dd = 0; dd < los; ++dd) {
-            int d = start + dd;
-            if (d < 0 || d >= days) continue;
-            room_occupied[idxDR(d, ridx)] = true;
-            for (int s = 0; s < shifts; ++s) {
-                int idx = dd * shifts + s;
-                int load = 1;
-                if (!f.nurse_load_per_shift.empty()) {
-                    if (idx < (int)f.nurse_load_per_shift.size()) load = f.nurse_load_per_shift[idx];
-                    else load = f.nurse_load_per_shift.back();
-                }
-                room_shift_load[idxDSR(d, s, ridx)] += load;
-                room_shift_skill[idxDSR(d, s, ridx)] = std::max(room_shift_skill[idxDSR(d, s, ridx)], f.min_nurse_level);
-            }
-        }
-    }
-
-    // 3. Popolamento da pazienti ammessi
-    for (int pid = 0; pid < (int)in.patients.size(); ++pid) {
-        if (!out.isAdmitted(pid)) continue;
-        int ridx = out.getRoomAssignedIdx(pid);
-        if (ridx < 0 || ridx >= room_count) continue;
-        int ad = out.getAdmitDay(pid);
-        int los = std::max(1, in.patients[pid].length_of_stay);
-        for (int dd = 0; dd < los; ++dd) {
-            int d = ad + dd;
-            if (d < 0 || d >= days) continue;
-            room_occupied[idxDR(d, ridx)] = true;
-            for (int s = 0; s < shifts; ++s) {
-                int idx = dd * shifts + s;
-                int load = 1;
-                if (!in.patients[pid].nurse_load_per_shift.empty()) {
-                    if (idx < (int)in.patients[pid].nurse_load_per_shift.size()) load = in.patients[pid].nurse_load_per_shift[idx];
-                    else load = in.patients[pid].nurse_load_per_shift.back();
-                }
-                room_shift_load[idxDSR(d, s, ridx)] += load;
-                room_shift_skill[idxDSR(d, s, ridx)] = std::max(room_shift_skill[idxDSR(d, s, ridx)], in.patients[pid].min_nurse_level);
-            }
-        }
-    }
-
-    // 4. Assegnazione greedy degli infermieri
-    for (int d = 0; d < days; ++d) {
-        for (int s = 0; s < shifts; ++s) {
-            for (int r = 0; r < room_count; ++r) {
-                if (!room_occupied[idxDR(d, r)]) continue;
-
-                int demand = room_shift_load[idxDSR(d, s, r)];
-                int req_skill = room_shift_skill[idxDSR(d, s, r)];
-
-                int best_nurse = -1;
-                long long best_score = std::numeric_limits<long long>::max();
-
-                for (int n = 0; n < nurse_count; ++n) {
-                    if (!nurse_available[idxDSN(d, s, n)]) continue;
-
-                    int cur = nurse_load[idxDSN(d, s, n)];
-                    int projected = cur + demand;
-                    int cap = nurse_shift_cap[idxDSN(d, s, n)] > 0 ? nurse_shift_cap[idxDSN(d, s, n)] : 9999;
-                    int overload = std::max(0, projected - cap);
-                    int skill_gap = std::max(0, req_skill - in.nurses[n].level);
-
-                    long long score = 0;
-                    score += 1000000LL * skill_gap;
-                    score += 10000LL * overload;
-                    score += 10LL * projected;
-                    score += n;
-
-                    if (score < best_score) {
-                        best_score = score;
-                        best_nurse = n;
-                    }
-                }
-
-                if (best_nurse >= 0) {
-                    nurse_load[idxDSN(d, s, best_nurse)] += demand;
-                    out.addNurseAssignment(best_nurse, d, s, r);
-                }
-            }
-        }
-    }
-}
+enum class Gender : int8_t {
+    NONE = 0,
+    A = 1,
+    B = 2
+};
 ```
+3. Aggiorna la struct `Patient`:
+   - Cambia `std::string sex;` in `Gender sex = Gender::NONE;`
+   - Cambia `std::vector<std::string> incompatible_rooms;` in `std::vector<int> incompatible_room_idxs;`
+   - Cambia `std::string surgeon_id;` in `int surgeon_idx = -1;`
+   - Assicurati che `int age_group = -1;` sia presente (dovrebbe già esserci).
+4. Aggiorna la struct `Occupant`:
+   - Cambia `std::string sex;` in `Gender sex = Gender::NONE;`
+   - Cambia `std::string room_id;` in `int room_idx = -1;`
+5. Aggiorna la classe `IHTC_Output`:
+   - Trova la dichiarazione: `std::vector<std::vector<std::string>> room_gender;`
+   - Cambiala in: `std::vector<std::vector<Gender>> room_gender;`
+   - Aggiorna la firma di `seedOccupantStay`:
+     `void seedOccupantStay(int room_idx, int admission_day, int length_of_stay, Gender sex);`
+
+### STEP 2: Modifica l'Inizializzazione in `IHTC_Data.cc`
+1. Apri `IHTC_Data.cc`.
+2. Nella funzione `IHTC_Output::init`, aggiorna l'inizializzazione di `room_gender`:
+```cpp
+    // Sostituisci la vecchia riga con questa:
+    room_gender.assign(in.rooms.size(), std::vector<Gender>(days, Gender::NONE));
+```
+
+### STEP 3: Modifica i Percorsi Critici in `IHTC_Data.cc`
+1. Sempre in `IHTC_Data.cc`, aggiorna `canAssignPatient`. Modifica i blocchi per Sesso, Stanze Incompatibili e Chirurgo per usare interi:
+```cpp
+    // 2. Vincoli della Stanza (Sesso) - SOSTITUISCI IL BLOCCO ESISTENTE
+    for (int dd = 0; dd < los; ++dd) {
+        int d_idx = day + dd;
+        if (d_idx < 0 || d_idx >= days) break;
+        if (room_occupancy[room_idx][d_idx] >= r.capacity) return false;
+        
+        // Nuovo controllo genere ultra-veloce (numerico)
+        if (p.sex != Gender::NONE) {
+            Gender g = room_gender[room_idx][d_idx];
+            if (g != Gender::NONE && g != p.sex) return false;
+        }
+    }
+
+    // 3. Stanze vietate - SOSTITUISCI IL BLOCCO ESISTENTE
+    for (int bad_idx : p.incompatible_room_idxs) {
+        if (bad_idx == room_idx) return false;
+    }
+
+    // 5. Vincoli del Chirurgo - SOSTITUISCI IL BLOCCO ESISTENTE
+    if (p.surgeon_idx >= 0 && p.surgeon_idx < (int)surgeon_availability.size()) {
+        if (day >= (int)surgeon_availability[p.surgeon_idx].size() || 
+            surgeon_availability[p.surgeon_idx][day] < p.surgery_time) {
+            return false;
+        }
+    }
+```
+2. Aggiorna `assignPatient`:
+```cpp
+    // Nel ciclo "Aggiornamento Stanza (Sesso)" sostituisci il check con:
+    if (in.patients[patient_id].sex != Gender::NONE && room_gender[room_idx][dd_idx] == Gender::NONE) {
+        room_gender[room_idx][dd_idx] = in.patients[patient_id].sex;
+    }
+
+    // Nel blocco "Aggiornamento Chirurgo" sostituisci con:
+    if (in.patients[patient_id].surgeon_idx >= 0) {
+        int surgeon_idx = in.patients[patient_id].surgeon_idx;
+        if (surgeon_idx < (int)surgeon_availability.size() && day >= 0 && day < days) {
+            surgeon_availability[surgeon_idx][day] -= in.patients[patient_id].surgery_time;
+        }
+    }
+```
+3. Aggiorna `seedOccupantStay`:
+```cpp
+    // Cambia il parametro `const std::string &sex` in `Gender sex` e aggiorna l'assegnazione:
+    if (sex != Gender::NONE && room_gender[room_idx][d] == Gender::NONE) {
+        room_gender[room_idx][d] = sex;
+    }
+```
+4. Aggiorna il calcolo di `SurgeonTransfer` in `computeAllCosts` (o dove risiede):
+```cpp
+    // Rimuovi l'uso delle stringhe come chiavi. Usa p.surgeon_idx.
+    // std::unordered_map<int, std::vector<std::set<int>>> surgeon_ot_by_day;
+    // La logica sarà identica, ma userà 'int' invece di 'std::string'.
+```
+
+### STEP 4: Traduzione nel Parser JSON (`json/parser.cc` o simile)
+1. Cerca il file responsabile del popolamento di `IHTC_Input` (`jsonio::load_instance`).
+2. Implementa l'interning direttamente in fase di lettura:
+   - **Gender**: Se leggi "A", imposta `p.sex = Gender::A;`. Se leggi "B", imposta `p.sex = Gender::B;`.
+   - **Stanze Incompatibili**: Mappa l'array di stringhe JSON negli indici interi corrispondenti usando una mappa o ricercandoli in `in.rooms`. Salva gli indici in `p.incompatible_room_idxs`.
+   - **Chirurgo**: Trova l'indice del chirurgo nell'array `in.surgeons` basandoti sulla stringa letta e salvalo in `p.surgeon_idx`.
+   - **Occupanti**: Risolvi l'indice della stanza (`f.room_id` -> `f.room_idx`) e il sesso.
+
+Assicurati che tutto compili. Questa modifica convertirà la validazione in O(1) puro!
