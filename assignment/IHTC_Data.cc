@@ -363,11 +363,19 @@ static SoftCostContext buildSoftCostContext(const IHTC_Input &in, const IHTC_Out
 
 } // namespace
 
-int IHTC_Output::ComputeCostRoomMixedAge() const {
-    if (!bound_input) return 0;
+IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
+    CostBreakdown cb;
+    if (!bound_input) return cb;
+
     const IHTC_Input &in = *bound_input;
+    
+    // 1. ALLOCAZIONE UNICA DEL CONTESTO
     SoftCostContext ctx = buildSoftCostContext(in, *this);
-    int raw_cost = 0;
+
+    // 2. CALCOLO DEI COSTI
+    
+    // -- Room Mixed Age --
+    int raw_age = 0;
     for (int r = 0; r < (int)in.rooms.size(); ++r) {
         for (int d = 0; d < ctx.days; ++d) {
             const auto &plist = ctx.patients_in_room_day[r][d];
@@ -381,17 +389,13 @@ int IHTC_Output::ComputeCostRoomMixedAge() const {
                 long long c = kv.second;
                 same_pairs += (c * (c - 1)) / 2;
             }
-            raw_cost += (int)std::max(0LL, total_pairs - same_pairs);
+            raw_age += (int)std::max(0LL, total_pairs - same_pairs);
         }
     }
-    return raw_cost * in.w_room_mixed_age;
-}
+    cb.age_mix = raw_age * in.w_room_mixed_age;
 
-int IHTC_Output::ComputeCostRoomNurseSkill() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    int raw_cost = 0;
+    // -- Room Nurse Skill --
+    int raw_skill = 0;
     for (int d = 0; d < ctx.days; ++d) {
         for (int sh = 0; sh < ctx.shifts; ++sh) {
             for (int r = 0; r < (int)in.rooms.size(); ++r) {
@@ -399,20 +403,16 @@ int IHTC_Output::ComputeCostRoomNurseSkill() const {
                 if (req <= 0) continue;
                 for (int nidx : ctx.room_shift_nurses[d][sh][r]) {
                     if (nidx >= 0 && nidx < (int)ctx.nurse_level.size() && ctx.nurse_level[nidx] < req) {
-                        raw_cost += (req - ctx.nurse_level[nidx]);
+                        raw_skill += (req - ctx.nurse_level[nidx]);
                     }
                 }
             }
         }
     }
-    return raw_cost * in.w_room_nurse_skill;
-}
+    cb.skill = raw_skill * in.w_room_nurse_skill;
 
-int IHTC_Output::ComputeCostContinuityOfCare() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    int raw_cost = 0;
+    // -- Continuity of Care --
+    int raw_cont = 0;
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         if (!(pid < admitted.size() && admitted[pid])) continue;
         int day0 = admit_day[pid];
@@ -427,42 +427,30 @@ int IHTC_Output::ComputeCostContinuityOfCare() const {
                 for (int nidx : ctx.room_shift_nurses[d][sh][ridx]) seen_nurses.insert(nidx);
             }
         }
-        if (!seen_nurses.empty()) raw_cost += std::max(0, (int)seen_nurses.size() - 1);
+        if (!seen_nurses.empty()) raw_cont += std::max(0, (int)seen_nurses.size() - 1);
     }
-    return raw_cost * in.w_continuity_of_care;
-}
+    cb.continuity = raw_cont * in.w_continuity_of_care;
 
-int IHTC_Output::ComputeCostNurseExcessiveWorkload() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    int raw_cost = 0;
+    // -- Excessive Workload --
+    int raw_excess = 0;
     for (int nidx = 0; nidx < (int)ctx.nurse_level.size(); ++nidx) {
         for (int t = 0; t < ctx.days * ctx.shifts; ++t) {
             int cap = (nidx < (int)ctx.nurse_max_load_by_shift.size()) ? ctx.nurse_max_load_by_shift[nidx][t] : 9999;
             int over = ctx.nurse_load_by_shift[nidx][t] - cap;
-            if (over > 0) raw_cost += over;
+            if (over > 0) raw_excess += over;
         }
     }
-    return raw_cost * in.w_nurse_eccessive_workload;
-}
+    cb.excess = raw_excess * in.w_nurse_eccessive_workload;
 
-int IHTC_Output::ComputeCostOpenOperatingTheater() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    int raw_cost = 0;
+    // -- Open Operating Theater --
+    int raw_ot = 0;
     for (int d = 0; d < ctx.days; ++d) {
-        if (!ctx.ot_by_day[d].empty()) raw_cost += (int)ctx.ot_by_day[d].size();
+        if (!ctx.ot_by_day[d].empty()) raw_ot += (int)ctx.ot_by_day[d].size();
     }
-    return raw_cost * in.w_open_operating_theater;
-}
+    cb.open_ot = raw_ot * in.w_open_operating_theater;
 
-int IHTC_Output::ComputeCostSurgeonTransfer() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    int raw_cost = 0;
+    // -- Surgeon Transfer --
+    int raw_surg = 0;
     std::unordered_map<std::string, std::vector<std::set<std::string>>> surgeon_ot_by_day;
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         if (!(pid < admitted.size() && admitted[pid])) continue;
@@ -477,57 +465,36 @@ int IHTC_Output::ComputeCostSurgeonTransfer() const {
     for (const auto &kv : surgeon_ot_by_day) {
         for (int d = 0; d < ctx.days; ++d) {
             int sz = (int)kv.second[d].size();
-            if (sz > 1) raw_cost += (sz - 1);
+            if (sz > 1) raw_surg += (sz - 1);
         }
     }
-    return raw_cost * in.w_surgeon_transfer;
-}
+    cb.surgeon_transfer = raw_surg * in.w_surgeon_transfer;
 
-int IHTC_Output::ComputeCostPatientDelay() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    return ctx.total_delay * in.w_patient_delay;
-}
+    // -- Patient Delay --
+    cb.delay = ctx.total_delay * in.w_patient_delay;
 
-int IHTC_Output::ComputeCostUnscheduledOptional() const {
-    if (!bound_input) return 0;
-    const IHTC_Input &in = *bound_input;
-    SoftCostContext ctx = buildSoftCostContext(in, *this);
-    return ctx.unscheduled_optional_count * in.w_unscheduled_optional;
-}
+    // -- Unscheduled Optional --
+    cb.unscheduled = ctx.unscheduled_optional_count * in.w_unscheduled_optional;
 
-int IHTC_Output::ComputeCostTotal() const {
-    return ComputeCostRoomMixedAge()
-        + ComputeCostRoomNurseSkill()
-        + ComputeCostContinuityOfCare()
-        + ComputeCostNurseExcessiveWorkload()
-        + ComputeCostOpenOperatingTheater()
-        + ComputeCostSurgeonTransfer()
-        + ComputeCostPatientDelay()
-        + ComputeCostUnscheduledOptional();
+    // 3. CALCOLO TOTALE
+    cb.total = cb.age_mix + cb.skill + cb.continuity + cb.excess + 
+               cb.open_ot + cb.surgeon_transfer + cb.delay + cb.unscheduled;
+
+    return cb;
 }
 
 void IHTC_Output::printCosts() const {
-    int age_mix_weighted = ComputeCostRoomMixedAge();
-    int skill_weighted = ComputeCostRoomNurseSkill();
-    int continuity_weighted = ComputeCostContinuityOfCare();
-    int excess_weighted = ComputeCostNurseExcessiveWorkload();
-    int open_ot_cost = ComputeCostOpenOperatingTheater();
-    int surgeon_transfer_weighted = ComputeCostSurgeonTransfer();
-    int delay_cost = ComputeCostPatientDelay();
-    int unscheduled_cost = ComputeCostUnscheduledOptional();
-    int total_cost = ComputeCostTotal();
+    CostBreakdown cb = computeAllCosts();
 
-    std::cout << "Cost: " << total_cost
-              << ", Unscheduled: " << unscheduled_cost
-              << ",  Delay: " << delay_cost
-              << ",  OpenOT: " << open_ot_cost
-              << ",  AgeMix: " << age_mix_weighted
-              << ",  Skill: " << skill_weighted
-              << ",  Excess: " << excess_weighted
-              << ",  Continuity: " << continuity_weighted
-              << ",  SurgeonTransfer: " << surgeon_transfer_weighted
+    std::cout << "Cost: " << cb.total
+              << ", Unscheduled: " << cb.unscheduled
+              << ",  Delay: " << cb.delay
+              << ",  OpenOT: " << cb.open_ot
+              << ",  AgeMix: " << cb.age_mix
+              << ",  Skill: " << cb.skill
+              << ",  Excess: " << cb.excess
+              << ",  Continuity: " << cb.continuity
+              << ",  SurgeonTransfer: " << cb.surgeon_transfer
               << std::endl;
 }
 

@@ -120,15 +120,18 @@ public:
     int getRoomOccupancy(int room_idx, int day) const;
     int getOtAvailability(int ot_idx, int day) const;
 
-    int ComputeCostRoomMixedAge() const;
-    int ComputeCostRoomNurseSkill() const;
-    int ComputeCostContinuityOfCare() const;
-    int ComputeCostNurseExcessiveWorkload() const;
-    int ComputeCostOpenOperatingTheater() const;
-    int ComputeCostSurgeonTransfer() const;
-    int ComputeCostPatientDelay() const;
-    int ComputeCostUnscheduledOptional() const;
-    int ComputeCostTotal() const;
+    struct CostBreakdown {
+        int age_mix = 0;
+        int skill = 0;
+        int continuity = 0;
+        int excess = 0;
+        int open_ot = 0;
+        int surgeon_transfer = 0;
+        int delay = 0;
+        int unscheduled = 0;
+        int total = 0;
+    };
+    CostBreakdown computeAllCosts() const;
     void writeJSON(const std::string& filename) const;
     void printCosts() const;
 

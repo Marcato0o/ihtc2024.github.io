@@ -92,26 +92,18 @@ void write_solution(const IHTC_Input &in, const IHTC_Output &out, const std::str
         sol["nurses"].push_back(nurse_out);
     }
 
-    int age_mix_weighted = out.ComputeCostRoomMixedAge();
-    int skill_weighted = out.ComputeCostRoomNurseSkill();
-    int continuity_weighted = out.ComputeCostContinuityOfCare();
-    int excess_weighted = out.ComputeCostNurseExcessiveWorkload();
-    int open_ot_cost = out.ComputeCostOpenOperatingTheater();
-    int surgeon_transfer_weighted = out.ComputeCostSurgeonTransfer();
-    int delay_cost = out.ComputeCostPatientDelay();
-    int unscheduled_cost = out.ComputeCostUnscheduledOptional();
-    int total_cost = out.ComputeCostTotal();
+    IHTC_Output::CostBreakdown cb = out.computeAllCosts();
 
     std::ostringstream cost_line;
-    cost_line << "Cost: " << total_cost
-              << ", Unscheduled: " << unscheduled_cost
-              << ",  Delay: " << delay_cost
-              << ",  OpenOT: " << open_ot_cost
-              << ",  AgeMix: " << age_mix_weighted
-              << ",  Skill: " << skill_weighted
-              << ",  Excess: " << excess_weighted
-              << ",  Continuity: " << continuity_weighted
-              << ",  SurgeonTransfer: " << surgeon_transfer_weighted;
+    cost_line << "Cost: " << cb.total
+              << ", Unscheduled: " << cb.unscheduled
+              << ",  Delay: " << cb.delay
+              << ",  OpenOT: " << cb.open_ot
+              << ",  AgeMix: " << cb.age_mix
+              << ",  Skill: " << cb.skill
+              << ",  Excess: " << cb.excess
+              << ",  Continuity: " << cb.continuity
+              << ",  SurgeonTransfer: " << cb.surgeon_transfer;
     sol["costs"].push_back(cost_line.str());
 
     std::ofstream fout(filename);
