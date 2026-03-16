@@ -91,14 +91,14 @@ public:
     int shifts_per_day = 3;
 
     // Pesi soft letti dal JSON (chiave → valore)
-    int w_room_mixed_age        = 5;
-    int w_open_operating_theater = 10;
-    int w_patient_delay          = 5;
-    int w_unscheduled_optional   = 100;
-    int w_room_nurse_skill       = 1;
-    int w_continuity_of_care     = 1;
-    int w_nurse_eccessive_workload = 1;
-    int w_surgeon_transfer       = 1;
+    int w_room_mixed_age;
+    int w_open_operating_theater;
+    int w_patient_delay;
+    int w_unscheduled_optional;
+    int w_room_nurse_skill;
+    int w_continuity_of_care;
+    int w_nurse_eccessive_workload;
+    int w_surgeon_transfer;
 
 private:
     friend bool jsonio::load_instance(IHTC_Input &in, const std::string &path);
