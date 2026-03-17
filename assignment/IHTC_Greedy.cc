@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 #include <climits>
+#include <cassert>
 #include <unordered_map>
 #include "nlohmann/json.hpp"
 
@@ -162,7 +163,7 @@ int countFeasiblePlacements(const IHTC_Input& in, const IHTC_Output& out, int pa
 void seedOccupants(const IHTC_Input& in, IHTC_Output& out) {
     for (const auto& f : in.occupants) {
         if (f.room_idx < 0 || f.room_idx >= (int)in.rooms.size()) continue;
-        out.seedOccupantStay(f.room_idx, f.admission_day, f.length_of_stay, f.sex);
+        out.seedOccupantStay(f.room_idx, f.length_of_stay, f.sex);
     }
 }
 
@@ -280,24 +281,26 @@ void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
     std::vector<std::vector<std::vector<int>>> room_shift_load(days, std::vector<std::vector<int>>(shifts, std::vector<int>(room_count, 0)));
     std::vector<std::vector<std::vector<int>>> room_shift_skill(days, std::vector<std::vector<int>>(shifts, std::vector<int>(room_count, 0)));
 
-    for (const auto& f : in.occupants) {
-        int ridx = f.room_idx;
+    for (const auto& o : in.occupants) {
+        int ridx = o.room_idx;
         if (ridx < 0 || ridx >= room_count) continue;
-        int start = std::max(0, f.admission_day);
-        int los = std::max(1, f.length_of_stay);
-        for (int dd = 0; dd < los; ++dd) {
-            int d = start + dd;
-            if (d < 0 || d >= days) continue;
+        int los = std::max(1, o.length_of_stay);
+        for (int d = 0; d < los && d < days; ++d) {
             room_occupied[d][ridx] = true;
             for (int s = 0; s < shifts; ++s) {
-                int idx = dd * shifts + s;
+                int shift_idx = d * shifts + s;
                 int load = 1;
-                if (!f.nurse_load_per_shift.empty()) {
-                    if (idx < (int)f.nurse_load_per_shift.size()) load = f.nurse_load_per_shift[idx];
-                    else load = f.nurse_load_per_shift.back();
+                int req_skill = 0;
+                if (!o.nurse_load_per_shift.empty()) {
+                    if (shift_idx < (int)o.nurse_load_per_shift.size()) load = o.nurse_load_per_shift[shift_idx];
+                    else load = o.nurse_load_per_shift.back();
+                }
+                if (!o.skill_level_required_per_shift.empty()) {
+                    if (shift_idx < (int)o.skill_level_required_per_shift.size()) req_skill = o.skill_level_required_per_shift[shift_idx];
+                    else req_skill = o.skill_level_required_per_shift.back();
                 }
                 room_shift_load[d][s][ridx] += load;
-                room_shift_skill[d][s][ridx] = std::max(room_shift_skill[d][s][ridx], f.min_nurse_level);
+                room_shift_skill[d][s][ridx] = std::max(room_shift_skill[d][s][ridx], req_skill);
             }
         }
     }
@@ -315,12 +318,17 @@ void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
             for (int s = 0; s < shifts; ++s) {
                 int idx = dd * shifts + s;
                 int load = 1;
+                int req_skill = 0;
                 if (!in.patients[pid].nurse_load_per_shift.empty()) {
                     if (idx < (int)in.patients[pid].nurse_load_per_shift.size()) load = in.patients[pid].nurse_load_per_shift[idx];
                     else load = in.patients[pid].nurse_load_per_shift.back();
                 }
+                if (!in.patients[pid].skill_level_required_per_shift.empty()) {
+                    if (idx < (int)in.patients[pid].skill_level_required_per_shift.size()) req_skill = in.patients[pid].skill_level_required_per_shift[idx];
+                    else req_skill = in.patients[pid].skill_level_required_per_shift.back();
+                }
                 room_shift_load[d][s][ridx] += load;
-                room_shift_skill[d][s][ridx] = std::max(room_shift_skill[d][s][ridx], in.patients[pid].min_nurse_level);
+                room_shift_skill[d][s][ridx] = std::max(room_shift_skill[d][s][ridx], req_skill);
             }
         }
     }

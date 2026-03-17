@@ -244,7 +244,7 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
             std::string surgeon_id = try_get_string(jp, {"surgeon","surgeon_id","surgeonId","assigned_surgeon"}, "");
             auto surgeon_it = surgeon_idx_by_id.find(surgeon_id);
             p.surgeon_idx = (surgeon_it != surgeon_idx_by_id.end()) ? surgeon_it->second : -1;
-            p.min_nurse_level = try_get_int(jp, {"min_nurse_level","minLevel","required_nurse_level"}, 0);
+            int scalar_req = try_get_int(jp, {"min_nurse_level","minLevel","required_nurse_level"}, 0);
 
             if (jp.contains("nurse_load") && jp["nurse_load"].is_array()) {
                 for (auto &v : jp["nurse_load"]) if (v.is_number()) p.nurse_load_per_shift.push_back(v.get<int>());
@@ -276,10 +276,14 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
                 }
             }
 
-            if (p.min_nurse_level == 0 && jp.contains("skill_level_required") && jp["skill_level_required"].is_array()) {
-                int req = 0;
-                for (const auto &v : jp["skill_level_required"]) if (v.is_number_integer()) req = std::max(req, v.get<int>());
-                p.min_nurse_level = req;
+            if (jp.contains("skill_level_required") && jp["skill_level_required"].is_array()) {
+                for (const auto &v : jp["skill_level_required"]) {
+                    if (v.is_number_integer()) p.skill_level_required_per_shift.push_back(v.get<int>());
+                }
+            }
+            if (p.skill_level_required_per_shift.empty() && scalar_req > 0) {
+                // Backward compatibility: scalar requirement applies to all shifts.
+                p.skill_level_required_per_shift.push_back(scalar_req);
             }
 
             in.patients.push_back(std::move(p));
@@ -294,16 +298,12 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
             auto room_it = room_idx_by_id.find(room_id);
             o.room_idx = (room_it != room_idx_by_id.end()) ? room_it->second : -1;
             o.sex = parse_gender(try_get_string(jo, {"sex","gender"}, ""));
-            o.admission_day = try_get_int(jo, {"admission_day","admissionDay","day"}, 0);
-            o.length_of_stay = try_get_int(jo, {"lengthOfStay","length_of_stay","los","stay"}, 1);
 
             if (jo.contains("workload_produced") && jo["workload_produced"].is_array()) {
                 for (const auto &v : jo["workload_produced"]) if (v.is_number()) o.nurse_load_per_shift.push_back(v.get<int>());
             }
             if (jo.contains("skill_level_required") && jo["skill_level_required"].is_array()) {
-                int req = 0;
-                for (const auto &v : jo["skill_level_required"]) if (v.is_number_integer()) req = std::max(req, v.get<int>());
-                o.min_nurse_level = req;
+                for (const auto &v : jo["skill_level_required"]) if (v.is_number_integer()) o.skill_level_required_per_shift.push_back(v.get<int>());
             }
             in.occupants.push_back(std::move(o));
         }

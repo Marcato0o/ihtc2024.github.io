@@ -1,0 +1,9 @@
+Parsed instance summary:
+  patients: 111
+  rooms:    9
+  days D:   14
+[SOLVER] Starting greedy solver...
+[SOLVER] Patients admitted: 71/111
+[SOLVER] Greedy pass finished.
+Cost: 25382, Unscheduled: 20000,  Delay: 2300,  OpenOT: 570,  AgeMix: 30,  Skill: 0,  Excess: 62,  Continuity: 2340,  SurgeonTransfer: 80
+Wrote solution to solution.json

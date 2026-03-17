@@ -156,7 +156,7 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
     }
 }
 
-void IHTC_Output::seedOccupantStay(int room_idx, int admission_day, int length_of_stay, Gender sex) {
+void IHTC_Output::seedOccupantStay(int room_idx, int length_of_stay, Gender sex) {
     // Controllo di sicurezza: verifichiamo che l'indice della stanza sia valido
     assert(room_idx >= 0 && room_idx < (int)room_occupancy.size());
     assert(!room_occupancy.empty() && !room_occupancy[room_idx].empty());
@@ -164,13 +164,11 @@ void IHTC_Output::seedOccupantStay(int room_idx, int admission_day, int length_o
     // Recuperiamo il numero totale di giorni disponibili nella struttura dati
     int days = (int)room_occupancy[room_idx].size();
     
-    // Assicuriamoci che la durata del soggiorno e il giorno di ammissione siano validi (almeno 1 giorno, da giorno 0 in poi)
+    // Assicuriamoci che la durata del soggiorno sia valida (almeno 1 giorno)
     int los = std::max(1, length_of_stay);
-    int start = std::max(0, admission_day);
     
-    // Iteriamo per ogni giorno di permanenza del paziente nella stanza
-    for (int dd = 0; dd < los; ++dd) {
-        int d = start + dd;
+    // Iteriamo per ogni giorno di permanenza del paziente nella stanza (partendo obbligatoriamente dal day 0)
+    for (int d = 0; d < los; ++d) {
         
         // Se il giorno va oltre l'orizzonte temporale pianificato, lo ignoriamo
         if (d >= days) continue;
@@ -191,6 +189,12 @@ void IHTC_Output::clearNurseAssignments() {
 }
 
 void IHTC_Output::addNurseAssignment(int nurse_idx, int day, int shift, int room_idx) {
+    for (NurseAssignment &na : nurse_assignments) {
+        if (na.day == day && na.shift == shift && na.room_idx == room_idx) {
+            na.nurse_idx = nurse_idx;
+            return;
+        }
+    }
     nurse_assignments.push_back({nurse_idx, day, shift, room_idx});
 }
 
@@ -278,24 +282,34 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
     int total_delay = 0;
     int unscheduled_optional_count = 0;
 
-    // Aggiungiamo il carico degli Occupants (Pazienti storici)
-    for (const auto &f : in.occupants) {
-        int ridx = f.room_idx;
-        if (ridx < 0 || ridx >= num_rooms) continue;
-        int start = std::max(0, f.admission_day);
-        int los = std::max(1, f.length_of_stay);
-        for (int dd = 0; dd < los; ++dd) {
-            int d = start + dd;
-            if (d < 0 || d >= days) continue;
+    // 1A. Aggiungiamo il carico degli "Occupants" (Pazienti già presenti nella struttura all'inizio del planning)
+    for (const Occupant &o : in.occupants) {
+        
+        int ridx = o.room_idx;        
+        int los = o.length_of_stay; // È la degenza residua a partire dal Giorno 0
+        
+        // Iteriamo sui giorni di permanenza residui (partendo obbligatoriamente dal Giorno 0)
+        for (int d = 0; d < los; ++d) {
+            // Iteriamo su ogni singolo turno del giorno (es. Mattina, Pomeriggio, Notte)
             for (int sh = 0; sh < shifts; ++sh) {
-                int idx = dd * shifts + sh;
-                int load = 1;
-                if (!f.nurse_load_per_shift.empty()) {
-                    load = (idx < (int)f.nurse_load_per_shift.size()) ? f.nurse_load_per_shift[idx] : f.nurse_load_per_shift.back();
+                int shift_idx = d * shifts + sh; // Indice progressivo del turno
+                int workload = 1;
+                int req_skill = 0;
+                // Carico di lavoro prodotto nel turno (unita di workload),
+                // Usa l'ultimo valore disponibile se l'array e piu corto.
+                if (!o.nurse_load_per_shift.empty()) {
+                    assert(shift_idx >= 0 && shift_idx < (int)o.nurse_load_per_shift.size());
+                    workload = o.nurse_load_per_shift[shift_idx];
                 }
+                if (!o.skill_level_required_per_shift.empty()) {
+                    assert(shift_idx >= 0 && shift_idx < (int)o.skill_level_required_per_shift.size());
+                    req_skill = o.skill_level_required_per_shift[shift_idx];
+                }
+                
+                // Calcoliamo l'indice lineare 1D e aggiorniamo il fabbisogno per quella stanza/turno
                 int dsr = dsr_idx(d, sh, ridx);
-                room_shift_load[dsr] += load;
-                room_shift_skill[dsr] = std::max(room_shift_skill[dsr], f.min_nurse_level);
+                room_shift_load[dsr] += workload;
+                room_shift_skill[dsr] = std::max(room_shift_skill[dsr], req_skill);
             }
         }
     }
@@ -303,38 +317,50 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
     // Aggiungiamo il carico dei Nuovi Pazienti
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
         if (!isAdmitted((int)pid)) {
+            // Gli optional non ammessi contribuiscono solo al costo unscheduled.
             if (!in.patients[pid].mandatory) unscheduled_optional_count++;
             continue;
         }
 
         int admit = admit_day[pid];
-        int los = std::max(1, in.patients[pid].length_of_stay);
+        int los = in.patients[pid].length_of_stay;
         int room_idx = room_assigned_idx[pid];
         
         if (room_idx >= 0 && room_idx < num_rooms) {
+            // Traccia i pazienti presenti in stanza/giorno (serve per il costo age_mix).
             for (int d = admit; d < admit + los && d < days; ++d) {
                 if (d >= 0) patients_in_room_day[rd_idx(room_idx, d)].push_back((int)pid);
             }
+            // Costruisce domanda infermieristica e skill richiesta per ogni turno del ricovero.
             for (int dd = 0; dd < los; ++dd) {
                 int d = admit + dd;
                 if (d < 0 || d >= days) continue;
                 for (int sh = 0; sh < shifts; ++sh) {
                     int idx = dd * shifts + sh;
-                    int load = 1;
+                    int workload = 1;
+                    int req_skill = 0;
                     if (!in.patients[pid].nurse_load_per_shift.empty()) {
-                        load = (idx < (int)in.patients[pid].nurse_load_per_shift.size()) ? in.patients[pid].nurse_load_per_shift[idx] : in.patients[pid].nurse_load_per_shift.back();
+                        assert(idx >= 0 && idx < (int)in.patients[pid].nurse_load_per_shift.size());
+                        workload = in.patients[pid].nurse_load_per_shift[idx];
+                    }
+                    if (!in.patients[pid].skill_level_required_per_shift.empty()) {
+                        assert(idx >= 0 && idx < (int)in.patients[pid].skill_level_required_per_shift.size());
+                        req_skill = in.patients[pid].skill_level_required_per_shift[idx];
                     }
                     int dsr = dsr_idx(d, sh, room_idx);
-                    room_shift_load[dsr] += load;
-                    room_shift_skill[dsr] = std::max(room_shift_skill[dsr], in.patients[pid].min_nurse_level);
+                    room_shift_load[dsr] += workload;
+                    // Se piu pazienti condividono stanza/turno, vale il requisito piu alto.
+                    room_shift_skill[dsr] = std::max(room_shift_skill[dsr], req_skill);
                 }
             }
         }
 
+        // Delay soft: giorni di attesa oltre la release date.
         if (admit >= 0) total_delay += std::max(0, admit - in.patients[pid].release_date);
 
         int ot_idx = ot_assigned_idx[pid];
         if (admit >= 0 && admit < days && ot_idx >= 0 && ot_idx < num_ots) {
+            // Marca OT aperta nel giorno di ammissione/intervento.
             ot_opened_day[admit * num_ots + ot_idx] = true;
         }
     }
@@ -354,36 +380,46 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
 
     // Assegnazioni infermieri
     std::vector<int> nurse_load_by_shift(nsh_size, 0);
-    std::vector<std::vector<int>> room_shift_nurses(dsr_size, std::vector<int>());
+    std::vector<int> room_shift_nurse(dsr_size, -1);
+    
     for (const auto &na : nurse_assignments) {
         if (na.nurse_idx < 0 || na.nurse_idx >= num_nurses) continue;
         if (na.day < 0 || na.day >= days || na.shift < 0 || na.shift >= shifts) continue;
         if (na.room_idx < 0 || na.room_idx >= num_rooms) continue;
         
         int dsr = dsr_idx(na.day, na.shift, na.room_idx);
-        room_shift_nurses[dsr].push_back(na.nurse_idx);
+        room_shift_nurse[dsr] = na.nurse_idx;
         nurse_load_by_shift[nsh_idx(na.nurse_idx, na.day * shifts + na.shift)] += room_shift_load[dsr];
     }
 
     // --- 2. CALCOLO DEI COSTI ---
     
     // -- Room Mixed Age --
+    // Calcola la penalità per la presenza di pazienti di età diversa nella stessa stanza e giorno.
+    // Per ogni stanza e giorno:
+    //   - Se ci sono almeno 2 pazienti, si contano tutte le coppie possibili.
+    //   - Si calcolano le coppie di pazienti che appartengono allo stesso gruppo di età.
+    //   - La penalità è proporzionale al numero di coppie di età diversa (tutte le coppie meno quelle dello stesso gruppo).
     int raw_age = 0;
     for (int r = 0; r < num_rooms; ++r) {
         for (int d = 0; d < days; ++d) {
-            const auto &plist = patients_in_room_day[rd_idx(r, d)];
-            if (plist.size() < 2) continue;
-            std::unordered_map<int, int> age_counts;
-            for (int pid : plist) age_counts[in.patients[pid].age_group]++;
+            const auto &plist = patients_in_room_day[rd_idx(r, d)]; // Lista pazienti in stanza r al giorno d
+            if (plist.size() < 2) continue; // Nessuna penalità se c'è 0 o 1 paziente
+            std::unordered_map<int, int> age_counts; // Conta quanti pazienti per ogni gruppo di età
+            for (int pid : plist)
+                age_counts[in.patients[pid].age_group]++;
             long long n = (long long)plist.size();
-            long long total_pairs = (n * (n - 1)) / 2;
-            long long same_pairs = 0;
+            long long total_pairs = (n * (n - 1)) / 2; // Numero totale di coppie possibili
+            long long same_pairs = 0; // Coppie con stesso gruppo di età
             for (const auto &kv : age_counts) {
+                // Per ogni gruppo di età, calcola le coppie interne (combinazioni di 2 tra quelli dello stesso gruppo)
                 same_pairs += ((long long)kv.second * (kv.second - 1)) / 2;
             }
+            // Penalità: tutte le coppie meno quelle dello stesso gruppo
             raw_age += (int)std::max(0LL, total_pairs - same_pairs);
         }
     }
+    // Applica il peso del problema
     cb.age_mix = raw_age * in.w_room_mixed_age;
 
     // -- Room Nurse Skill --
@@ -394,10 +430,9 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
                 int dsr = dsr_idx(d, sh, r);
                 int req = room_shift_skill[dsr];
                 if (req <= 0) continue;
-                for (int nidx : room_shift_nurses[dsr]) {
-                    if (nidx >= 0 && nidx < num_nurses && nurse_level[nidx] < req) {
-                        raw_skill += (req - nurse_level[nidx]);
-                    }
+                int nidx = room_shift_nurse[dsr];
+                if (nidx >= 0 && nidx < num_nurses && nurse_level[nidx] < req) {
+                    raw_skill += (req - nurse_level[nidx]);
                 }
             }
         }
@@ -417,7 +452,8 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
             int d = day0 + dd;
             if (d < 0 || d >= days) continue;
             for (int sh = 0; sh < shifts; ++sh) {
-                for (int nidx : room_shift_nurses[dsr_idx(d, sh, ridx)]) seen_nurses.insert(nidx);
+                int nidx = room_shift_nurse[dsr_idx(d, sh, ridx)];
+                if (nidx >= 0) seen_nurses.insert(nidx);
             }
         }
         if (!seen_nurses.empty()) raw_cont += std::max(0, (int)seen_nurses.size() - 1);

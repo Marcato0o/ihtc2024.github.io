@@ -1,6 +1,7 @@
 #include "io.hh"
 
 #include <algorithm>
+#include <cassert>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -68,6 +69,7 @@ void write_solution(const IHTC_Input &in, const IHTC_Output &out, const std::str
         if (day < 0 || day >= days) continue;
         if (shift < 0 || shift >= shifts) continue;
         if (room_idx < 0 || room_idx >= (int)in.rooms.size()) continue;
+
         nurse_day_shift_rooms[nurse_idx][day][shift].insert(in.rooms[room_idx].id);
     }
 
