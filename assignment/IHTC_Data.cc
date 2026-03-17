@@ -248,13 +248,19 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
 
     const IHTC_Input &in = *bound_input;
     
-    int days = in.D > 0 ? in.D : 1;
-    int shifts = std::max(1, in.shifts_per_day);
+    int days = in.D;
+    int shifts = in.shifts_per_day;
     int num_rooms = (int)in.rooms.size();
     int num_nurses = (int)in.nurses.size();
+    int num_ots = (int)in.ots.size();
 
+    // Mappatura 3D -> 1D: Indice lineare per Giorno (d), Turno (sh), Stanza (r)
     auto dsr_idx = [&](int d, int sh, int r) { return (d * shifts + sh) * num_rooms + r; };
+    
+    // Mappatura 2D -> 1D: Indice lineare per Stanza (r), Giorno (d)
     auto rd_idx = [&](int r, int d) { return r * days + d; };
+    
+    // Mappatura 2D -> 1D: Indice lineare per Infermiere (n), Turno globale (shift_idx)
     auto nsh_idx = [&](int n, int shift_idx) { return n * (days * shifts) + shift_idx; };
 
     int dsr_size = days * shifts * num_rooms;
@@ -263,8 +269,11 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
     // --- 1. PREPARAZIONE DATI LOCALI (Inline) ---
     std::vector<int> room_shift_load(dsr_size, 0); 
     std::vector<int> room_shift_skill(dsr_size, 0); 
+
     std::vector<std::vector<int>> patients_in_room_day(rd_size, std::vector<int>()); 
-    std::vector<std::set<std::string>> ot_by_day(days, std::set<std::string>());
+
+    // Array 1D che mappa l'utilizzo di una sala operatoria: (Giorno * num_ots) + ot_idx
+    std::vector<bool> ot_opened_day(days * num_ots, false);
     
     int total_delay = 0;
     int unscheduled_optional_count = 0;
@@ -325,8 +334,8 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
         if (admit >= 0) total_delay += std::max(0, admit - in.patients[pid].release_date);
 
         int ot_idx = ot_assigned_idx[pid];
-        if (admit >= 0 && admit < days && ot_idx >= 0 && ot_idx < (int)in.ots.size()) {
-            ot_by_day[admit].insert(in.ots[ot_idx].id);
+        if (admit >= 0 && admit < days && ot_idx >= 0 && ot_idx < num_ots) {
+            ot_opened_day[admit * num_ots + ot_idx] = true;
         }
     }
 
@@ -429,7 +438,11 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
     // -- Open Operating Theater --
     int raw_ot = 0;
     for (int d = 0; d < days; ++d) {
-        if (!ot_by_day[d].empty()) raw_ot += (int)ot_by_day[d].size();
+        for (int o = 0; o < num_ots; ++o) {
+            if (ot_opened_day[d * num_ots + o]) {
+                raw_ot++;
+            }
+        }
     }
     cb.open_ot = raw_ot * in.w_open_operating_theater;
 
