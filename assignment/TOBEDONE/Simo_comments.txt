@@ -11,3 +11,5 @@ IHTC_Data.hh:62-70
 
 
 IHTC_Data.cc:403-421    cambiare metrica  di calcolo costo di AgeMix, come quella del validator.
+
+IHTC_Data.cc:160-170 occhio cambiare array bidimensionali

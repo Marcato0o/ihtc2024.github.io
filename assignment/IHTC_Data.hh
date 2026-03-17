@@ -138,6 +138,7 @@ public:
     void printCosts() const;
 
 private:
+    // Controllare se possiamo appiattirli
     struct NurseAssignment { int nurse_idx; int day; int shift; int room_idx; };
     const IHTC_Input *bound_input = nullptr;
     std::vector<bool> admitted;

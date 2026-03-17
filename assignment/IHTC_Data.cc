@@ -120,7 +120,7 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
     room_assigned_idx[patient_id] = room_idx;
     ot_assigned_idx[patient_id] = ot_idx;
     
-    int los = std::max(1, in.patients[patient_id].length_of_stay);
+    int los = in.patients[patient_id].length_of_stay;
     int days = in.D; 
     
     // 2. Aggiornamento Stanza (Posti letto e Sesso)
@@ -156,22 +156,16 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
     }
 }
 
+// Controlla array bidimensionali
 void IHTC_Output::seedOccupantStay(int room_idx, int length_of_stay, Gender sex) {
     // Controllo di sicurezza: verifichiamo che l'indice della stanza sia valido
     assert(room_idx >= 0 && room_idx < (int)room_occupancy.size());
     assert(!room_occupancy.empty() && !room_occupancy[room_idx].empty());
     
-    // Recuperiamo il numero totale di giorni disponibili nella struttura dati
-    int days = (int)room_occupancy[room_idx].size();
-    
-    // Assicuriamoci che la durata del soggiorno sia valida (almeno 1 giorno)
-    int los = std::max(1, length_of_stay);
+    int los = length_of_stay;
     
     // Iteriamo per ogni giorno di permanenza del paziente nella stanza (partendo obbligatoriamente dal day 0)
     for (int d = 0; d < los; ++d) {
-        
-        // Se il giorno va oltre l'orizzonte temporale pianificato, lo ignoriamo
-        if (d >= days) continue;
         
         // Occupiamo un posto letto in quella stanza per quel giorno
         room_occupancy[room_idx][d] += 1;

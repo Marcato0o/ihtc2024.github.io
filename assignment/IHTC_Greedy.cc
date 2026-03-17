@@ -244,7 +244,7 @@ void solvePASandSCP(const IHTC_Input& in, IHTC_Output& out) {
 
 void solveNRA(const IHTC_Input& in, IHTC_Output& out) {
     int days = in.D;
-    int shifts = std::max(1, in.shifts_per_day);
+    int shifts = in.shifts_per_day;
     int room_count = (int)in.rooms.size();
     int nurse_count = (int)in.nurses.size();
 
