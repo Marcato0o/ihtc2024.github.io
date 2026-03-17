@@ -393,7 +393,7 @@ IHTC_Output::CostBreakdown IHTC_Output::computeAllCosts() const {
     }
 
     // --- 2. CALCOLO DEI COSTI ---
-    
+    // TODO: Usare la stessa metrica del validator!!!
     // -- Room Mixed Age --
     // Calcola la penalità per la presenza di pazienti di età diversa nella stessa stanza e giorno.
     // Per ogni stanza e giorno:

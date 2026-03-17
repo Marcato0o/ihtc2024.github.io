@@ -10,5 +10,4 @@ IHTC_Data.hh:62-70
 ===================================================================================================================
 
 
-IHTC_Data.cc:213-522
-    Secondo me non ha senso printare certi soft constraints, tanto il costo me lo da la soluzione
+IHTC_Data.cc:403-421    cambiare metrica  di calcolo costo di AgeMix, come quella del validator.
