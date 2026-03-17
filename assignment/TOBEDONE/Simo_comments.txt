@@ -9,8 +9,6 @@ IHTC_Data.hh:62-70
                                                     DATA.cc
 ===================================================================================================================
 
-IHTC_Data.cc:248-253
-    perchè queste inizializzazioni? Hanno senso o sono un errore?
 
 IHTC_Data.cc:213-522
     Secondo me non ha senso printare certi soft constraints, tanto il costo me lo da la soluzione
