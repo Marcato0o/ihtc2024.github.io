@@ -1,120 +1,122 @@
 # Final Assignment - **Integrated Healthcare Timetabling Problem (IHTP)**
 
-## Cos'è il problema
+## What is the problem?
 
-L'**Integrated Healthcare Timetabling Problem (IHTP)** è un problema di ottimizzazione combinatoria che integra tre sotto-problemi ospedalieri:
+The **Integrated Healthcare Timetabling Problem (IHTP)** is a combinatorial optimization problem that integrates three hospital subproblems:
 
-1. **PAS** – Patient Admission Scheduling (quando e dove ricoverare i pazienti)
-2. **NRA** – Nurse-to-Room Assignment (quale infermiere si occupa di quale stanza per ogni turno)
-3. **SCP** – Surgical Case Planning (in quale sala operatoria si opera ogni paziente)
+1. **PAS** – Patient Admission Scheduling (when and where to admit patients)
+2. **NRA** – Nurse-to-Room Assignment (which nurse is assigned to which room for each shift)
+3. **SCP** – Surgical Case Planning (which operating theater is assigned to each patient)
 
-L'obiettivo è **minimizzare una funzione di costo** che penalizza la violazione dei vincoli soft, rispettando sempre tutti i vincoli hard.
-
----
-
-## L'orizzonte temporale
-
-- Il periodo di pianificazione dura **D giorni** (multiplo di 7: 14, 21 o 28 giorni)
-- Ogni giorno ha **3 turni**: early (mattina), late (pomeriggio), night (notte)
-- In totale ci sono quindi **3D turni**, numerati da 0 a 3D−1
+The goal is to **minimize a cost function** that penalizes soft constraint violations, while always respecting all hard constraints.
 
 ---
 
-## Le entità coinvolte
+## The planning horizon
 
-**Risorse infrastrutturali:**
-
-- **Sale operatorie (OT)**: hanno una capacità massima giornaliera in minuti; alcune possono essere non disponibili certi giorni
-- **Stanze**: hanno un numero di letti (capacità); alcune stanze sono incompatibili con certi pazienti
-
-**Risorse umane:**
-
-- **Infermieri**: hanno un livello di competenza (da 0 a L−1), un roster fisso di turni in cui lavorano, e un carico massimo per ogni turno
-- **Chirurghi**: hanno un tempo massimo di chirurgia per ogni giorno (0 = non disponibile)
-
-**Pazienti:**
-
-- Possono essere **obbligatori** (devono essere ricoverati nel periodo) o **opzionali** (possono essere rimandati)
-- Per ogni paziente sono noti:
-    - Data di rilascio (prima data possibile di ammissione)
-    - Data di scadenza (solo per obbligatori)
-    - Gruppo d'età
-    - Sesso
-    - Durata del ricovero
-    - Stanze incompatibili
-    - Chirurgo assegnato
-    - Durata dell'intervento
-    - Per ogni turno del ricovero: carico di lavoro generato e livello minimo di competenza infermieristica richiesto
-- **Occupanti**: pazienti già presenti all'inizio del periodo, con stanza e data di ammissione già fissate
+- The planning period lasts **D days** (a multiple of 7: 14, 21, or 28 days)
+- Each day has **3 shifts**: early (morning), late (afternoon), night
+- In total, there are **3D shifts**, numbered from 0 to 3D−1
 
 ---
 
-## La soluzione da produrre
+## Entities involved
 
-Per ogni istanza devi determinare 4 cose:
+**Infrastructure resources:**
 
-1. **Data di ammissione** di ogni paziente (o rimando per gli opzionali)
-2. **Stanza** assegnata a ogni paziente ammesso (per tutta la durata del ricovero, senza trasferimenti)
-3. **Infermiere** assegnato a ogni stanza occupata, per ogni turno
-4. **Sala operatoria** assegnata a ogni paziente per il giorno dell'intervento (che coincide col giorno di ammissione)
+- **Operating Theaters (OT):** have a maximum daily capacity in minutes; some may be unavailable on certain days
+- **Rooms:** have a number of beds (capacity); some rooms are incompatible with certain patients
+
+**Human resources:**
+
+- **Nurses:** have a skill level (from 0 to L−1), a fixed roster of working shifts, and a maximum workload per shift
+- **Surgeons:** have a maximum surgery time per day (0 = unavailable)
+
+**Patients:**
+
+- Can be **mandatory** (must be admitted during the period) or **optional** (can be postponed)
+- For each patient, the following are known:
+    - Release date (earliest possible admission)
+    - Due date (only for mandatory patients)
+    - Age group
+    - Gender
+    - Length of stay
+    - Incompatible rooms
+    - Assigned surgeon
+    - Surgery duration
+    - For each shift of the stay: workload generated and minimum required nurse skill level
+- **Occupants:** patients already present at the start of the period, with fixed room and admission date
 
 ---
 
-## Vincoli Hard (H) — devono essere sempre rispettati
+## The solution to produce
 
-| Codice | Descrizione |
+For each instance, we must determine 4 things:
+
+1. **Admission date** for each patient (or postponement for optional ones)
+2. **Room** assigned to each admitted patient (for the entire stay, no transfers)
+3. **Nurse** assigned to each occupied room for each shift
+4. **Operating theater** assigned to each patient for the day of surgery (which coincides with the admission day)
+
+---
+
+## Hard Constraints (H) — must always be respected
+
+| Code | Description |
 | --- | --- |
-| H1 | Nessun mix di genere nella stessa stanza nello stesso giorno |
-| H2 | Il paziente va in una stanza compatibile |
-| H3 | Il chirurgo non può superare il suo tempo massimo giornaliero |
-| H4 | La sala operatoria non può superare la sua capacità giornaliera |
-| H5 | Tutti i pazienti obbligatori devono essere ammessi |
-| H6 | Il paziente può essere ammesso solo tra la sua release date e due date |
-| H7 | Il numero di pazienti in una stanza non supera la sua capacità |
-| H8 | Ogni stanza occupata deve avere un infermiere in servizio assegnato |
+| H1 | No gender mix in the same room on the same day |
+| H2 | Patient must be in a compatible room |
+| H3 | Surgeon cannot exceed their daily maximum surgery time |
+| H4 | Operating theater cannot exceed its daily capacity |
+| H5 | All mandatory patients must be admitted |
+| H6 | Patient can only be admitted between their release and due dates |
+| H7 | Number of patients in a room cannot exceed its capacity |
+| H8 | Every occupied room must have an assigned nurse on duty |
 
 ---
 
-## Vincoli Soft (S) — contribuiscono al costo da minimizzare
+## Soft Constraints (S) — contribute to the cost to minimize
 
-| Codice | Descrizione | Peso (esempio) |
+| Code | Description | Weight (example) |
 | --- | --- | --- |
-| S1 | Minimizzare la differenza di gruppi d'età nella stessa stanza | 5 |
-| S2 | L'infermiere assegnato deve avere competenza sufficiente per i pazienti | 10 |
-| S3 | Minimizzare il numero di infermieri distinti che si prendono cura di un paziente (continuità di cura) | 5 |
-| S4 | L'infermiere non deve superare il suo carico massimo | 10 |
-| S5 | Minimizzare il numero di sale operatorie aperte ogni giorno | 20 |
-| S6 | Minimizzare il numero di sale diverse in cui opera uno stesso chirurgo nello stesso giorno | 1 |
-| S7 | Minimizzare il ritardo di ammissione rispetto alla release date | 5 |
-| S8 | Minimizzare il numero di pazienti opzionali non ammessi | 350 |
+| S1 | Minimize the difference in age groups in the same room | 5 |
+| S2 | Assigned nurse must have sufficient skill for the patients | 10 |
+| S3 | Minimize the number of distinct nurses caring for a patient (continuity of care) | 5 |
+| S4 | Nurse should not exceed their maximum workload | 10 |
+| S5 | Minimize the number of operating theaters opened each day | 20 |
+| S6 | Minimize the number of different theaters a surgeon operates in on the same day | 1 |
+| S7 | Minimize admission delay relative to release date | 5 |
+| S8 | Minimize the number of optional patients not admitted | 350 |
 
-I pesi sono **specifici per ogni istanza** e sono contenuti nel file JSON di input.
-
----
-
-## Il tuo obiettivo (come indicato dal professore)
-
-Implementare una soluzione **greedy** — cioè costruttiva, senza ricerca locale o ottimizzazione avanzata. L'approccio greedy significa prendere decisioni una alla volta in modo "ragionevole" (es. prima i pazienti obbligatori, poi gli opzionali; assegnare prima le stanze più compatibili, ecc.), senza tornare indietro a migliorare. Il vantaggio è che potrai poi **confrontare oggettivamente** la qualità dei tuoi risultati con quelli dei finalisti della competizione, che usavano MILP, metaeuristiche, ecc.
-
-Un possibile approccio greedy articolato in fasi:
-
-1. **Ordina i pazienti** (es. prima i mandatori per urgenza, poi gli opzionali)
-2. **Assegna data di ammissione e stanza** rispettando H1, H2, H6, H7
-3. **Assegna la sala operatoria** rispettando H3, H4 (es. quella con più capacità residua)
-4. **Assegna gli infermieri** alle stanze per ogni turno, rispettando H8 e cercando di minimizzare S2, S3, S4
+Weights are **instance-specific** and are included in the input JSON file.
 
 ---
 
-## Materiale necessario
+## Our approach (student perspective)
 
-Tutto è disponibile sul sito della competizione: [**https://ihtc2024.github.io**](https://ihtc2024.github.io/)
+The goal is to implement a **greedy solution** — that is, a constructive approach, without local search or advanced optimization. The greedy approach means making decisions one at a time in a "reasonable" way (e.g., mandatory patients first, then optional; assign the most compatible rooms first, etc.), without backtracking to improve.
 
-Hai bisogno di:
+A possible greedy approach, broken down into phases:
 
-- **Dataset pubblico**: 30 istanze (`i01`–`i30`) in formato JSON, più 10 istanze di test (`test01`–`test10`) già con soluzioni di esempio — queste ultime sono utilissime per testare il tuo codice
-- **Validatore**: fornito come codice sorgente C++, da compilare con g++. Prende in input il file istanza e il file soluzione e restituisce sia le violazioni dei vincoli hard che il costo totale
-- **Formato dei file**: descritto nell'Appendice A del paper — input e output sono entrambi in **JSON**
+1. **Order the patients** (e.g., mandatory first by urgency, then optional)
+2. **Assign admission date and room** respecting H1, H2, H6, H7
+3. **Assign the operating theater** respecting H3, H4 (e.g., the one with the most residual capacity)
+4. **Assign nurses** to rooms for each shift, respecting H8 and trying to minimize S2, S3, S4
 
-In sintesi, il flusso di lavoro sarà: scarichi un'istanza JSON → la dai in input al tuo algoritmo greedy → ottieni una soluzione JSON → la passi al validatore per vedere quante violazioni hai e qual è il costo → confronti il costo con gli upper bound riportati in Table 4 del paper.
+---
+
+## Repository structure and workflow
+
+- All code and data are organized in this repository.
+- **Dataset:** 30 public instances (`i01`–`i30`) in JSON format, plus 10 test instances (`test01`–`test10`) with example solutions, used for testing.
+- **Validator:** provided as C++ source code, to be compiled with g++. It takes the instance and solution files as input and returns both hard constraint violations and the total cost.
+- **File format:** described in Appendix A of the paper — both input and output are in **JSON**.
+
+Typical workflow:
+1. Select a JSON instance →
+2. Run your greedy algorithm on it →
+3. Obtain a solution JSON →
+4. Pass it to the validator to see the violations and total cost →
+5. Compare your cost with the upper bounds reported in Table 4 of the paper.
 
 ---
