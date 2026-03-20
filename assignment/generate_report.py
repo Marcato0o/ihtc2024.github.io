@@ -2,7 +2,7 @@
 """
 generate_report.py
 Runs the IHTC greedy solver on all 40 instances, validates each solution,
-and produces REPORT.md at the repository root.
+and produces RESULTS_REPORT.md at the repository root.
 """
 
 import json
@@ -559,7 +559,7 @@ def main():
         lines.append(s)
 
     # Write file
-    out_path = REPO_ROOT / 'REPORT.md'
+    out_path = REPO_ROOT / 'RESULTS_REPORT.md'
     out_path.write_text('\n'.join(lines), encoding='utf-8')
     print(f'\nReport written to {out_path}')
 
