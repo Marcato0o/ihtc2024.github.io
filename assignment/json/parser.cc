@@ -1,6 +1,5 @@
 #include "io.hh"
 
-#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <iostream>
@@ -298,6 +297,8 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
             auto room_it = room_idx_by_id.find(room_id);
             o.room_idx = (room_it != room_idx_by_id.end()) ? room_it->second : -1;
             o.sex = parse_gender(try_get_string(jo, {"sex","gender"}, ""));
+            o.length_of_stay = try_get_int(jo, {"length_of_stay","lengthOfStay","los"}, 0);
+            o.age_group = parse_age_group(jo, {"age_group","ageGroup","age"}, age_group_idx_by_key, next_age_group_idx, -1);
 
             if (jo.contains("workload_produced") && jo["workload_produced"].is_array()) {
                 for (const auto &v : jo["workload_produced"]) if (v.is_number()) o.nurse_load_per_shift.push_back(v.get<int>());

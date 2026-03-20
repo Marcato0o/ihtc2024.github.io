@@ -1,12 +1,10 @@
 #include "io.hh"
 
 #include <algorithm>
-#include <cassert>
 #include <fstream>
 #include <iostream>
 #include <set>
 #include <sstream>
-#include <unordered_map>
 #include "../nlohmann/json.hpp"
 
 namespace {
@@ -22,13 +20,13 @@ std::string shift_name_from_index(int idx) {
 namespace jsonio {
 
 void write_solution(const IHTC_Input &in, const IHTC_Output &out, const std::string &filename) {
-    nlohmann::ordered_json sol = nlohmann::ordered_json::object();
-    sol["patients"] = nlohmann::ordered_json::array();
-    sol["nurses"] = nlohmann::ordered_json::array();
-    sol["costs"] = nlohmann::ordered_json::array();
+    nlohmann::json sol = nlohmann::json::object();
+    sol["patients"] = nlohmann::json::array();
+    sol["nurses"] = nlohmann::json::array();
+    sol["costs"] = nlohmann::json::array();
 
     for (size_t pid = 0; pid < in.patients.size(); ++pid) {
-        nlohmann::ordered_json ja = nlohmann::ordered_json::object();
+        nlohmann::json ja = nlohmann::json::object();
         ja["id"] = in.patients[pid].id;
 
         bool is_admitted = out.isAdmitted((int)pid);
@@ -74,18 +72,18 @@ void write_solution(const IHTC_Input &in, const IHTC_Output &out, const std::str
     }
 
     for (int nurse_idx = 0; nurse_idx < (int)in.nurses.size(); ++nurse_idx) {
-        nlohmann::ordered_json nurse_out = nlohmann::ordered_json::object();
+        nlohmann::json nurse_out = nlohmann::json::object();
         nurse_out["id"] = in.nurses[nurse_idx].id;
-        nurse_out["assignments"] = nlohmann::ordered_json::array();
+        nurse_out["assignments"] = nlohmann::json::array();
 
         for (int d = 0; d < days; ++d) {
             for (int sh = 0; sh < shifts; ++sh) {
                 const auto &rooms_set = nurse_day_shift_rooms[nurse_idx][d][sh];
                 if (rooms_set.empty()) continue;
-                nlohmann::ordered_json asg = nlohmann::ordered_json::object();
+                nlohmann::json asg = nlohmann::json::object();
                 asg["day"] = d;
                 asg["shift"] = shift_name_from_index(sh);
-                asg["rooms"] = nlohmann::ordered_json::array();
+                asg["rooms"] = nlohmann::json::array();
                 for (const auto &rid : rooms_set) asg["rooms"].push_back(rid);
                 nurse_out["assignments"].push_back(asg);
             }

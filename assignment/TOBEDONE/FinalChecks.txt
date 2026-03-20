@@ -1,2 +1,0 @@
-1. Spiegare perchè facciamo il calcolo dei soft constraints tutti in un'unica funzione (IHTC_Data.cc:272 e IHTC_Data.cc:388)
-2. Spiegare bene gli le funzioni helper e le indicizzazzioni per evitare array annidati multipli (IHTC_Data.cc:267-269)

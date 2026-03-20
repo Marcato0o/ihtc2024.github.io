@@ -64,6 +64,7 @@ struct Occupant {
     int room_idx = -1;
     Gender sex = Gender::NONE;
     int length_of_stay = 0;
+    int age_group = -1;
     std::vector<int> nurse_load_per_shift;
     std::vector<int> skill_level_required_per_shift;
 };
@@ -111,9 +112,10 @@ public:
     void init(const IHTC_Input &in);
     bool canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const;
     void assignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in);
-    void seedOccupantStay(int room_idx, int length_of_stay, Gender sex);
+    void seedOccupantStay(int room_idx, int length_of_stay, Gender sex, int age_group = -1);
     void clearNurseAssignments();
     void addNurseAssignment(int nurse_idx, int day, int shift, int room_idx);
+    void markOptionalUnscheduled();
     bool isAdmitted(int patient_id) const;
     int getAdmitDay(int patient_id) const;
     int getRoomAssignedIdx(int patient_id) const;
@@ -121,6 +123,11 @@ public:
     std::vector<std::tuple<int, int, int, int>> getNurseAssignmentTuples() const;
     int getRoomOccupancy(int room_idx, int day) const;
     int getOtAvailability(int ot_idx, int day) const;
+    // Marginal S1 cost (validator formula: max-min of age groups) of placing
+    // a patient with `age_group` in room on day. Returns increase in (max-min) range.
+    int  getRoomAgeMixMarginal(int room_idx, int day, int age_group) const;
+    // True if surgeon already has a patient on `day` in any OT other than `ot_idx`
+    bool surgeonHasOtherOTOnDay(int surgeon_idx, int day, int ot_idx) const;
 
     struct CostBreakdown {
         int age_mix = 0;
@@ -150,6 +157,29 @@ private:
     std::vector<std::vector<int>> ot_availability;
     std::vector<std::vector<int>> surgeon_availability;
     std::vector<std::vector<Gender>> room_gender;
+
+    // S1 age-mix cache: commit one (room, day) update for a patient with age_group.
+    // flat_idx = room_idx * D + day (pre-computed by caller).
+    void applyAgeMixUpdate(int flat_idx, int age_group);
+
+    // --- Tracking arrays (maintained incrementally in assignPatient) ---
+
+    // Flat int, size = num_rooms * D
+    // room_day_min_age[room * D + day] = min age_group among patients in room on day
+    // INT_MAX means no patient with known age yet; -1 means empty (max side)
+    std::vector<int> room_day_min_age;
+    std::vector<int> room_day_max_age;
+
+    // Flat bool, size = num_surgeons * D * num_ots
+    // [(surgeon * D + day) * num_ots + ot] = true if surgeon uses that OT on that day
+    std::vector<bool> surgeon_day_ot_used;
+
+    // --- Cost caches (accumulated in assignPatient, read by computeAllCosts) ---
+    int cache_delay_raw        = 0;  // sum of (admit_day - release_date)
+    int cache_open_ot_count    = 0;  // count of (day, OT) pairs first opened
+    int cache_age_mix_raw      = 0;  // sum of (max-min) range increments per room/day
+    int cache_surgeon_xfer_raw = 0;  // count of surgeon OT-transfer events
+    int cache_unscheduled_raw  = 0;  // count of optional patients not admitted
 };
 
 #endif // IHTC_DATA_HH
