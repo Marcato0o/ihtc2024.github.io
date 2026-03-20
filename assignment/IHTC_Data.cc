@@ -51,7 +51,7 @@ IHTC_Output::IHTC_Output(const IHTC_Input &in) {
 // accumulate incrementally so computeAllCosts() only multiplies by weights.
 // ---------------------------------------------------------------------------
 void IHTC_Output::init(const IHTC_Input &in) {
-    int days = in.D;
+    int days = in.D; // guard against degenerate inputs
 
     // Per-patient admission records (all false / -1 = not yet admitted).
     admitted.assign(in.patients.size(), false);
@@ -123,7 +123,11 @@ void IHTC_Output::init(const IHTC_Input &in) {
 //   H3 — surgeon has enough remaining daily time budget
 // ---------------------------------------------------------------------------
 bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const {
-    
+    // Bounds checks (active in debug builds, compiled away in release -DNDEBUG).
+    assert(room_idx >= 0 && room_idx < (int)in.rooms.size());
+    assert(day >= 0 && day < in.D);
+    assert(patient_id >= 0 && patient_id < (int)in.patients.size());
+
     const Patient &p = in.patients[patient_id];
     const Room    &r = in.rooms[room_idx];
 
@@ -203,9 +207,11 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
     // On the first patient of a given sex, lock the room's gender for that day.
     for (int dd = 0; dd < los; ++dd) {
         int d_abs = day + dd; // absolute calendar day
-        room_occupancy[room_idx * days + d_abs] += 1;
-        if (room_gender[room_idx * days + d_abs] == Gender::NONE) {
-            room_gender[room_idx * days + d_abs] = in.patients[patient_id].sex;
+        if (d_abs >= 0 && d_abs < days) {
+            room_occupancy[room_idx * days + d_abs] += 1;
+            if (room_gender[room_idx * days + d_abs] == Gender::NONE) {
+                room_gender[room_idx * days + d_abs] = in.patients[patient_id].sex;
+            }
         }
     }
 
@@ -313,18 +319,22 @@ void IHTC_Output::addNurseAssignment(int nurse_idx, int day, int shift, int room
 }
 
 bool IHTC_Output::isAdmitted(int patient_id) const {
+    assert(patient_id >= 0 && patient_id < (int)admitted.size());
     return admitted[patient_id];
 }
 
 int IHTC_Output::getAdmitDay(int patient_id) const {
+    assert(patient_id >= 0 && patient_id < (int)admit_day.size());
     return admit_day[patient_id];
 }
 
 int IHTC_Output::getRoomAssignedIdx(int patient_id) const {
+    assert(patient_id >= 0 && patient_id < (int)room_assigned_idx.size());
     return room_assigned_idx[patient_id];
 }
 
 int IHTC_Output::getOtAssignedIdx(int patient_id) const {
+    assert(patient_id >= 0 && patient_id < (int)ot_assigned_idx.size());
     return ot_assigned_idx[patient_id];
 }
 
@@ -340,6 +350,8 @@ std::vector<std::tuple<int, int, int, int>> IHTC_Output::getNurseAssignmentTuple
 
 
 int IHTC_Output::getOtAvailability(int ot_idx, int day) const {
+    assert(ot_idx >= 0 && ot_idx < (int)ot_availability.size());
+    assert(day >= 0 && day < (int)ot_availability[0].size());
     return ot_availability[ot_idx][day];
 }
 
