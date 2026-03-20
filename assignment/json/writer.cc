@@ -7,7 +7,7 @@
 #include <sstream>
 #include "../nlohmann/json.hpp"
 
-namespace {
+namespace { // internal helpers
 
 std::string shift_name_from_index(int idx) {
     if (idx == 0) return "early";

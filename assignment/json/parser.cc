@@ -6,7 +6,7 @@
 #include <sstream>
 #include "../nlohmann/json.hpp"
 
-namespace {
+namespace { // internal helpers
 
 using json = nlohmann::json;
 
@@ -226,8 +226,17 @@ bool load_instance(IHTC_Input &in, const std::string &path) {
     surgeon_idx_by_id.reserve(in.surgeons.size());
     for (int i = 0; i < (int)in.surgeons.size(); ++i) surgeon_idx_by_id[in.surgeons[i].id] = i;
 
+    // Build age-group index map from the top-level "age_groups" array, matching
+    // the validator's canonical ordering (j["age_groups"][0], [1], ...).
     std::unordered_map<std::string, int> age_group_idx_by_key;
     int next_age_group_idx = 0;
+    if (j.contains("age_groups") && j["age_groups"].is_array()) {
+        for (const auto &ag : j["age_groups"]) {
+            std::string key = ag.is_string() ? ag.get<std::string>() : ag.dump();
+            if (age_group_idx_by_key.find(key) == age_group_idx_by_key.end())
+                age_group_idx_by_key[key] = next_age_group_idx++;
+        }
+    }
 
     if (j.contains("patients") && j["patients"].is_array()) {
         for (const auto &jp : j["patients"]) {

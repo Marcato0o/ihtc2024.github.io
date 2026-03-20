@@ -5,7 +5,7 @@
 #include <climits>
 #include "nlohmann/json.hpp"
 
-namespace {
+namespace { // internal helpers
 
 // ---------------------------------------------------------------------------
 // sortPatientsByPriority — rank all patients by static scheduling priority.
@@ -219,9 +219,6 @@ namespace GreedySolver {
 // constrained patient first prevents it from being left with no valid slot.
 // ---------------------------------------------------------------------------
 void solvePASandSCP(const IHTC_Input& in, IHTC_Output& out) {
-    // Reset all solution arrays and cost caches to their initial state.
-    out.init(in);
-
     // Seed occupants so room constraints reflect the state at day 0.
     seedOccupants(in, out);
 

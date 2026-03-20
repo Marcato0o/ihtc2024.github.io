@@ -23,6 +23,10 @@ const std::string &IHTC_Input::getRawJsonText() const {
     return raw_json_text;
 }
 
+bool IHTC_Input::loadInstance(const std::string &path) {
+    return jsonio::load_instance(*this, path);
+}
+
 // =============================================================================
 // IHTC_Output — construction and initialization
 // =============================================================================
@@ -57,9 +61,9 @@ void IHTC_Output::init(const IHTC_Input &in) {
 
     nurse_assignments.clear();
 
-    // room_occupancy[room][day] = number of beds occupied.
+    // room_occupancy[room * D + day] = number of beds occupied.
     // Starts at 0; canAssignPatient() rejects if this reaches room capacity.
-    room_occupancy.assign(in.rooms.size(), std::vector<int>(days, 0));
+    room_occupancy.assign(in.rooms.size() * days, 0);
 
     // ot_availability[ot][day] = remaining surgery minutes for OT on that day.
     // Copied from the instance's maximum capacity and decremented by assignPatient().
@@ -77,8 +81,8 @@ void IHTC_Output::init(const IHTC_Input &in) {
         surgeon_availability[i].resize(days, 0);
     }
 
-    // room_gender[room][day] = Gender::NONE until the first patient locks it.
-    room_gender.assign(in.rooms.size(), std::vector<Gender>(days, Gender::NONE));
+    // room_gender[room * D + day] = Gender::NONE until the first patient locks it.
+    room_gender.assign(in.rooms.size() * days, Gender::NONE);
 
     int n_rooms = (int)in.rooms.size();
     int n_ots   = (int)in.ots.size();
@@ -120,8 +124,8 @@ void IHTC_Output::init(const IHTC_Input &in) {
 // ---------------------------------------------------------------------------
 bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot_idx, const IHTC_Input &in) const {
     // Bounds checks (active in debug builds, compiled away in release -DNDEBUG).
-    assert(room_idx >= 0 && room_idx < (int)room_occupancy.size());
-    assert(day >= 0 && day < (int)room_occupancy[0].size());
+    assert(room_idx >= 0 && room_idx < (int)in.rooms.size());
+    assert(day >= 0 && day < in.D);
     assert(patient_id >= 0 && patient_id < (int)in.patients.size());
 
     const Patient &p = in.patients[patient_id];
@@ -144,11 +148,11 @@ bool IHTC_Output::canAssignPatient(int patient_id, int day, int room_idx, int ot
         if (d_idx >= days) break; // stay extends beyond planning horizon; days >= D have no tracking arrays
 
         // H7: At least one free bed on this day.
-        if (room_occupancy[room_idx][d_idx] >= r.capacity) return false;
+        if (room_occupancy[room_idx * days + d_idx] >= r.capacity) return false;
 
         // H1: No gender mixing. Once a room has a gender, it stays that way.
         if (p.sex != Gender::NONE) {
-            Gender g = room_gender[room_idx][d_idx];
+            Gender g = room_gender[room_idx * days + d_idx];
             if (g != Gender::NONE && g != p.sex) return false;
         }
     }
@@ -204,9 +208,9 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
     for (int dd = 0; dd < los; ++dd) {
         int d_abs = day + dd; // absolute calendar day
         if (d_abs >= 0 && d_abs < days) {
-            room_occupancy[room_idx][d_abs] += 1;
-            if (room_gender[room_idx][d_abs] == Gender::NONE) {
-                room_gender[room_idx][d_abs] = in.patients[patient_id].sex;
+            room_occupancy[room_idx * days + d_abs] += 1;
+            if (room_gender[room_idx * days + d_abs] == Gender::NONE) {
+                room_gender[room_idx * days + d_abs] = in.patients[patient_id].sex;
             }
         }
     }
@@ -273,20 +277,19 @@ void IHTC_Output::assignPatient(int patient_id, int day, int room_idx, int ot_id
 // each day in [0, length_of_stay).
 // ---------------------------------------------------------------------------
 void IHTC_Output::seedOccupantStay(int room_idx, int length_of_stay, Gender sex, int age_group) {
-    assert(room_idx >= 0 && room_idx < (int)room_occupancy.size());
-    assert(!room_occupancy.empty() && !room_occupancy[room_idx].empty());
+    assert(room_idx >= 0 && room_idx < (int)bound_input->rooms.size());
 
     int los  = length_of_stay;
-    int days = (int)room_occupancy[room_idx].size();
+    int days = bound_input->D;
 
     // Occupants always start from day 0 of the planning horizon.
     for (int d = 0; d < los; ++d) {
         // Consume one bed.
-        room_occupancy[room_idx][d] += 1;
+        room_occupancy[room_idx * days + d] += 1;
 
         // Lock room gender on the first occupant with a known sex.
-        if (sex != Gender::NONE && room_gender[room_idx][d] == Gender::NONE)
-            room_gender[room_idx][d] = sex;
+        if (sex != Gender::NONE && room_gender[room_idx * days + d] == Gender::NONE)
+            room_gender[room_idx * days + d] = sex;
 
         // S1 incremental update.
         applyAgeMixUpdate(room_idx * days + d, age_group);
@@ -345,11 +348,6 @@ std::vector<std::tuple<int, int, int, int>> IHTC_Output::getNurseAssignmentTuple
     return tuples;
 }
 
-int IHTC_Output::getRoomOccupancy(int room_idx, int day) const {
-    assert(room_idx >= 0 && room_idx < (int)room_occupancy.size());
-    assert(day >= 0 && day < (int)room_occupancy[0].size());
-    return room_occupancy[room_idx][day];
-}
 
 int IHTC_Output::getOtAvailability(int ot_idx, int day) const {
     assert(ot_idx >= 0 && ot_idx < (int)ot_availability.size());
@@ -617,12 +615,4 @@ void IHTC_Output::printCosts() const {
 
 void IHTC_Output::writeJSON(const std::string& filename) const {
     jsonio::write_solution(*bound_input, *this, filename);
-}
-
-// =============================================================================
-// IHTC_Input — instance loading
-// =============================================================================
-
-bool IHTC_Input::loadInstance(const std::string &path) {
-    return jsonio::load_instance(*this, path);
 }
