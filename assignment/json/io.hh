@@ -1,7 +1,7 @@
 #ifndef JSON_IO_HH
 #define JSON_IO_HH
 
-#include "IHTC_Data.hh"
+#include "../IHTC_Data.hh"
 
 // JSON I/O interface for the IHTC solver.
 namespace jsonio {
