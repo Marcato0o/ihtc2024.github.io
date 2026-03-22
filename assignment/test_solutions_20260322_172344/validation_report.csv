@@ -1,0 +1,11 @@
+test,solution,patients,rooms,days,solver_started,admitted,admitted_total,solver_finished,solver_cost,unscheduled,delay,open_ot,age_mix,skill,excess,continuity,surgeon_transfer,total_violations,total_cost,validator_exit
+test01.json,sol_test01.json,42,5,21,1,29,42,1,4521,1950,665,360,130,4,36,1375,1,0,4521,0
+test02.json,sol_test02.json,37,6,14,1,34,37,1,2597,1050,695,160,115,39,203,305,30,0,2597,0
+test03.json,sol_test03.json,45,6,14,1,16,45,1,11616,10150,570,50,8,3,30,805,0,0,11616,0
+test04.json,sol_test04.json,54,8,14,1,52,54,1,3538,500,1110,150,10,0,1290,471,7,0,3538,0
+test05.json,sol_test05.json,62,6,14,1,22,62,1,17517,16000,160,270,5,5,17,1060,0,0,17517,0
+test06.json,sol_test06.json,111,9,14,1,69,111,1,26799,21000,2160,570,35,0,64,2880,90,0,26799,0
+test07.json,sol_test07.json,113,9,21,1,66,113,1,19946,11750,615,1150,435,1880,451,3555,110,0,19946,0
+test08.json,sol_test08.json,173,9,21,1,63,173,1,31399,27500,1990,960,43,0,233,665,8,0,31399,0
+test09.json,sol_test09.json,146,14,21,1,97,146,1,26851,17150,1790,640,6,0,1010,6155,100,0,26851,0
+test10.json,sol_test10.json,525,46,21,1,446,525,1,76660,23700,9010,4950,80,0,9170,27820,1930,0,76660,0

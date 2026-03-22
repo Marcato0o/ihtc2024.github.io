@@ -15,9 +15,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths (WSL style — this script runs inside WSL)
 # ---------------------------------------------------------------------------
-CODE_DIR  = Path('/mnt/c/Users/sdalz/OneDrive/Immagini/Documenti/GitHub/ihtc2024.github.io/assignment')
-ASSETS    = Path('/mnt/c/Users/sdalz/OneDrive/Immagini/Documenti/GitHub/ihtc2024.github.io/assets/files')
-REPO_ROOT = Path('/mnt/c/Users/sdalz/OneDrive/Immagini/Documenti/GitHub/ihtc2024.github.io')
+REPO_ROOT = Path(__file__).parent.parent.resolve()
+CODE_DIR  = REPO_ROOT / 'assignment'
+ASSETS    = REPO_ROOT / 'assets/files'
 
 SOLVER    = CODE_DIR / 'IHTC_Test.exe'
 VALIDATOR = ASSETS / 'IHTP_Validator'
