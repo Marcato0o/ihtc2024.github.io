@@ -7,16 +7,6 @@
 #include <sstream>
 #include "../nlohmann/json.hpp"
 
-namespace { // internal helpers
-
-std::string shift_name_from_index(int idx) {
-    if (idx == 0) return "early";
-    if (idx == 1) return "late";
-    return "night";
-}
-
-} // namespace
-
 namespace jsonio {
 
 void write_solution(const IHTC_Input &in, const IHTC_Output &out, const std::string &filename) {
@@ -82,7 +72,7 @@ void write_solution(const IHTC_Input &in, const IHTC_Output &out, const std::str
                 if (rooms_set.empty()) continue;
                 nlohmann::json asg = nlohmann::json::object();
                 asg["day"] = d;
-                asg["shift"] = shift_name_from_index(sh);
+                asg["shift"] = (sh < (int)in.shift_types.size()) ? in.shift_types[sh] : std::to_string(sh);
                 asg["rooms"] = nlohmann::json::array();
                 for (const auto &rid : rooms_set) asg["rooms"].push_back(rid);
                 nurse_out["assignments"].push_back(asg);
