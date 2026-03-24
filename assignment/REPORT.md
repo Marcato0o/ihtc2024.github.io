@@ -1,7 +1,5 @@
 # IHTC 2024 — Greedy Solver · Architecture & Logic
 
-*Based on the source code in `code/` as of 2026-03-24.*
-
 ---
 
 ## 1. Problem Overview
