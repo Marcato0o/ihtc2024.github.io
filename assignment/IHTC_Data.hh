@@ -99,6 +99,11 @@ public:
     int D              = 0; // planning horizon (days)
     int shifts_per_day = 0; // set from JSON "shift_types" array size
 
+    // -- Instance metadata --
+    int skill_levels = 0;                  // number of distinct skill levels (e.g. 3)
+    std::vector<std::string> shift_types;  // canonical shift names; index = shift integer
+    std::vector<std::string> age_groups;   // canonical age-group names; index = age_group integer
+
     // -- Soft-constraint weights --
     int w_room_mixed_age;
     int w_open_operating_theater;
